@@ -146,8 +146,12 @@ export default function Home() {
         if (activeBatch.parentBatchId) {
           const parent = batches.find((b) => b.id === activeBatch.parentBatchId);
           if (parent?.sentResults?.length) {
-            parentThreadIds = Object.fromEntries(parent.sentResults.map((r) => [r.email, r.threadId]));
-            parentMimeMessageIds = Object.fromEntries(parent.sentResults.map((r) => [r.email, r.mimeMessageId]));
+            parentThreadIds = {};
+            parentMimeMessageIds = {};
+            for (const r of parent.sentResults) {
+              parentThreadIds[r.email] = r.threadId;
+              parentMimeMessageIds[r.email] = r.mimeMessageId;
+            }
           }
         }
         const res = await fetch("/api/send/now", {
@@ -322,7 +326,7 @@ export default function Home() {
             </div>
           )}
 
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+          {!activeBatch?.parentBatchId && <div className="flex items-center gap-2 w-full sm:w-auto">
             <label className="flex items-center gap-2 text-sm text-neutral-500 font-medium whitespace-nowrap">
               <Clock className="h-4 w-4" />
               Schedule for
@@ -341,7 +345,7 @@ export default function Home() {
                 Clear
               </button>
             )}
-          </div>
+          </div>}
 
           <Button
             onClick={handleCreateDrafts}

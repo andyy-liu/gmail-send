@@ -55,12 +55,6 @@ export async function POST(request: Request) {
             fromName,
             fromEmail
           );
-          results.push({
-            email: contact.email,
-            messageId: data.id ?? "",
-            threadId: data.threadId ?? "",
-            mimeMessageId: data.mimeMessageId,
-          });
         } else {
           data = await sendMessage(
             session.accessToken,
@@ -71,13 +65,13 @@ export async function POST(request: Request) {
             fromName,
             fromEmail
           );
-          results.push({
-            email: contact.email,
-            messageId: data.id ?? "",
-            threadId: data.threadId ?? "",
-            mimeMessageId: data.mimeMessageId,
-          });
         }
+        results.push({
+          email: contact.email,
+          messageId: data.id ?? "",
+          threadId: data.threadId ?? "",
+          mimeMessageId: data.mimeMessageId,
+        });
       } catch (err: unknown) {
         errors.push({
           email: contact.email,

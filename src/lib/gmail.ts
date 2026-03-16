@@ -35,6 +35,12 @@ function cleanListHtml(html: string): string {
     .replace(/<\/p><\/li>/gi, "</li>");
 }
 
+function getGmailClient(accessToken: string) {
+  const auth = new google.auth.OAuth2();
+  auth.setCredentials({ access_token: accessToken });
+  return google.gmail({ version: "v1", auth });
+}
+
 function createMimeMessage(
   to: string,
   subject: string,
@@ -88,10 +94,7 @@ export async function sendMessage(
   fromName?: string,
   fromEmail?: string
 ): Promise<{ id?: string | null; threadId?: string | null; mimeMessageId: string }> {
-  const auth = new google.auth.OAuth2();
-  auth.setCredentials({ access_token: accessToken });
-
-  const gmail = google.gmail({ version: "v1", auth });
+  const gmail = getGmailClient(accessToken);
 
   const subject = processTemplate(subjectTemplate, contact, false);
   const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
@@ -136,10 +139,7 @@ export async function sendReply(
   fromName?: string,
   fromEmail?: string
 ): Promise<{ id?: string | null; threadId?: string | null; mimeMessageId: string }> {
-  const auth = new google.auth.OAuth2();
-  auth.setCredentials({ access_token: accessToken });
-
-  const gmail = google.gmail({ version: "v1", auth });
+  const gmail = getGmailClient(accessToken);
 
   const subject = processTemplate(subjectTemplate, contact, false);
   const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
@@ -165,10 +165,7 @@ export async function createDraft(
   bodyTemplate: string,
   signatureHtml?: string
 ) {
-  const auth = new google.auth.OAuth2();
-  auth.setCredentials({ access_token: accessToken });
-
-  const gmail = google.gmail({ version: "v1", auth });
+  const gmail = getGmailClient(accessToken);
 
   const subject = processTemplate(subjectTemplate, contact, false);
   const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
