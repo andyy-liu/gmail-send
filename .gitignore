@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# scheduled jobs (contains refresh tokens — never commit)
+/data/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

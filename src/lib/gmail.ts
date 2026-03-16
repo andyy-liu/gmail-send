@@ -63,6 +63,33 @@ function createMimeMessage(to: string, subject: string, htmlBody: string): strin
     .replace(/=+$/, "");
 }
 
+export async function sendMessage(
+  accessToken: string,
+  contact: Contact,
+  subjectTemplate: string,
+  bodyTemplate: string,
+  signatureHtml?: string
+) {
+  const auth = new google.auth.OAuth2();
+  auth.setCredentials({ access_token: accessToken });
+
+  const gmail = google.gmail({ version: "v1", auth });
+
+  const subject = processTemplate(subjectTemplate, contact, false);
+  const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
+
+  const rawMessage = createMimeMessage(contact.email, subject, body);
+
+  const res = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: {
+      raw: rawMessage,
+    },
+  });
+
+  return res.data;
+}
+
 export async function createDraft(
   accessToken: string,
   contact: Contact,

@@ -3,7 +3,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Contact } from "@/lib/gmail";
-import { Trash2, Plus, Upload } from "lucide-react";
+import { Trash2, Plus, Upload, Eraser } from "lucide-react";
 
 interface ContactTableProps {
   contacts: Contact[];
@@ -119,6 +119,12 @@ export function ContactTable({ contacts, setContacts }: ContactTableProps) {
           <Upload className="h-4 w-4" />
           Import CSV
         </Button>
+        {contacts.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => setContacts([])} className="gap-2 text-neutral-400 hover:text-red-500">
+            <Eraser className="h-4 w-4" />
+            Clear All
+          </Button>
+        )}
         <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
       </div>
     </div>

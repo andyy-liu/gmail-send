@@ -6,10 +6,11 @@ import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { ContactTable } from "@/components/ContactTable";
 import { TemplateEditor } from "@/components/TemplateEditor";
 import { SignatureDialog } from "@/components/SignatureDialog";
+import { ScheduledJobsPanel } from "@/components/ScheduledJobsPanel";
 import { Contact } from "@/lib/gmail";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, SendIcon, LogOut, PenLine } from "lucide-react";
+import { Loader2, SendIcon, LogOut, PenLine, Clock } from "lucide-react";
 
 export default function Home() {
   const { data: session, status } = useSession();
@@ -19,6 +20,8 @@ export default function Home() {
   const [contacts, setContacts] = useLocalStorage<Contact[]>("gmailsend_contacts", [
     { email: "", firstName: "", company: "" },
   ]);
+  const [scheduledAt, setScheduledAt] = useLocalStorage("gmailsend_scheduled_at", "");
+  const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [sigDialogOpen, setSigDialogOpen] = useState(false);
@@ -56,7 +59,7 @@ export default function Home() {
     try {
       if (!subject || !body) throw new Error("Subject and Body are required.");
       if (contacts.length === 0) throw new Error("At least one contact is required.");
-      
+
       for (let i = 0; i < contacts.length; i++) {
         const c = contacts[i];
         if (!c.email || !c.firstName || !c.company) {
@@ -64,27 +67,46 @@ export default function Home() {
         }
       }
 
-      const res = await fetch("/api/drafts/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subject, body, signature, contacts }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) throw new Error(data.error || "Failed to create drafts.");
-
-      if (data.errors && data.errors.length > 0) {
-        setMessage({
-          type: "error",
-          text: `Created ${data.results?.length || 0} drafts, but failed on ${data.errors.length}. See console.`,
+      if (scheduledAt) {
+        // Scheduled send path
+        const res = await fetch("/api/send/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subject, body, signature, contacts, scheduledAt }),
         });
-        console.error("Draft errors:", data.errors);
-      } else {
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to schedule send.");
+
+        const formatted = new Date(data.scheduledAt).toLocaleString();
         setMessage({
           type: "success",
-          text: `Successfully created ${data.results.length} draft(s)!`,
+          text: `Scheduled ${data.count} email(s) to send at ${formatted}.`,
         });
+        setScheduleRefreshKey((k) => k + 1);
+      } else {
+        // Immediate drafts path
+        const res = await fetch("/api/drafts/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subject, body, signature, contacts }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to create drafts.");
+
+        if (data.errors && data.errors.length > 0) {
+          setMessage({
+            type: "error",
+            text: `Created ${data.results?.length || 0} drafts, but failed on ${data.errors.length}. See console.`,
+          });
+          console.error("Draft errors:", data.errors);
+        } else {
+          setMessage({
+            type: "success",
+            text: `Successfully created ${data.results.length} draft(s)!`,
+          });
+        }
       }
     } catch (err: unknown) {
       setMessage({ type: "error", text: err instanceof Error ? err.message : "An unknown error occurred" });
@@ -138,21 +160,42 @@ export default function Home() {
           </section>
 
         <div className="max-w-2xl mx-auto mt-12 pt-8 border-t flex flex-col items-center space-y-4">
-          <Button 
-            onClick={handleCreateDrafts} 
-            disabled={isSubmitting} 
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <label className="flex items-center gap-2 text-sm text-neutral-500 font-medium whitespace-nowrap">
+              <Clock className="h-4 w-4" />
+              Schedule for
+            </label>
+            <input
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              className="flex-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-neutral-400"
+            />
+            {scheduledAt && (
+              <button
+                onClick={() => setScheduledAt("")}
+                className="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+
+          <Button
+            onClick={handleCreateDrafts}
+            disabled={isSubmitting}
             size="lg"
             className="w-full sm:w-auto min-w-[240px] rounded-xl h-12 text-base font-medium shadow-sm"
           >
             {isSubmitting ? (
               <>
                 <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                Generating Drafts...
+                {scheduledAt ? "Scheduling..." : "Generating Drafts..."}
               </>
             ) : (
               <>
                 <SendIcon className="mr-2 h-4 w-4" />
-                Create Drafts in Gmail
+                {scheduledAt ? "Schedule Send" : "Create Drafts in Gmail"}
               </>
             )}
           </Button>
@@ -163,6 +206,8 @@ export default function Home() {
             </div>
           )}
         </div>
+
+        <ScheduledJobsPanel refreshKey={scheduleRefreshKey} />
       </main>
 
       <SignatureDialog
