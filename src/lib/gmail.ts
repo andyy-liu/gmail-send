@@ -35,7 +35,15 @@ function cleanListHtml(html: string): string {
     .replace(/<\/p><\/li>/gi, "</li>");
 }
 
-function createMimeMessage(to: string, subject: string, htmlBody: string): string {
+function createMimeMessage(
+  to: string,
+  subject: string,
+  htmlBody: string,
+  mimeMessageId: string,
+  extraHeaders: string[] = [],
+  fromName?: string,
+  fromEmail?: string
+): string {
   const wrappedHtml = [
     `<!DOCTYPE html>`,
     `<html>`,
@@ -45,9 +53,17 @@ function createMimeMessage(to: string, subject: string, htmlBody: string): strin
     `</body></html>`,
   ].join("\n");
 
+  const fromAddr = fromEmail ?? "me";
+  const fromHeader = fromName
+    ? `From: =?UTF-8?B?${Buffer.from(fromName).toString("base64")}?= <${fromAddr}>`
+    : `From: ${fromAddr}`;
+
   const message = [
+    fromHeader,
     `To: ${to}`,
     `Subject: =?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`,
+    `Message-ID: ${mimeMessageId}`,
+    ...extraHeaders,
     `MIME-Version: 1.0`,
     `Content-Type: text/html; charset=UTF-8`,
     `Content-Transfer-Encoding: base64`,
@@ -68,8 +84,10 @@ export async function sendMessage(
   contact: Contact,
   subjectTemplate: string,
   bodyTemplate: string,
-  signatureHtml?: string
-) {
+  signatureHtml?: string,
+  fromName?: string,
+  fromEmail?: string
+): Promise<{ id?: string | null; threadId?: string | null; mimeMessageId: string }> {
   const auth = new google.auth.OAuth2();
   auth.setCredentials({ access_token: accessToken });
 
@@ -77,17 +95,67 @@ export async function sendMessage(
 
   const subject = processTemplate(subjectTemplate, contact, false);
   const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
+  const mimeMessageId = `<${crypto.randomUUID()}@mail.gmail.com>`;
 
-  const rawMessage = createMimeMessage(contact.email, subject, body);
+  const rawMessage = createMimeMessage(contact.email, subject, body, mimeMessageId, [], fromName, fromEmail);
 
   const res = await gmail.users.messages.send({
     userId: "me",
-    requestBody: {
-      raw: rawMessage,
-    },
+    requestBody: { raw: rawMessage },
   });
 
-  return res.data;
+  // Gmail may replace our Message-ID header on delivery. Fetch the real one
+  // so In-Reply-To on follow-ups matches what recipients actually received.
+  let finalMimeMessageId = mimeMessageId;
+  if (res.data.id) {
+    try {
+      const meta = await gmail.users.messages.get({
+        userId: "me",
+        id: res.data.id,
+        format: "metadata",
+      });
+      const headers = meta.data.payload?.headers ?? [];
+      const header = headers.find((h) => h.name?.toLowerCase() === "message-id");
+      if (header?.value) finalMimeMessageId = header.value;
+    } catch (err) {
+      console.error("[sendMessage] failed to fetch Message-ID from Gmail:", err);
+    }
+  }
+
+  return { id: res.data.id, threadId: res.data.threadId, mimeMessageId: finalMimeMessageId };
+}
+
+export async function sendReply(
+  accessToken: string,
+  contact: Contact,
+  threadId: string,
+  inReplyToMimeMessageId: string,
+  subjectTemplate: string,
+  bodyTemplate: string,
+  signatureHtml?: string,
+  fromName?: string,
+  fromEmail?: string
+): Promise<{ id?: string | null; threadId?: string | null; mimeMessageId: string }> {
+  const auth = new google.auth.OAuth2();
+  auth.setCredentials({ access_token: accessToken });
+
+  const gmail = google.gmail({ version: "v1", auth });
+
+  const subject = processTemplate(subjectTemplate, contact, false);
+  const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
+  const mimeMessageId = `<${crypto.randomUUID()}@mail.gmail.com>`;
+
+  const raw = createMimeMessage(contact.email, subject, body, mimeMessageId, [
+    `In-Reply-To: ${inReplyToMimeMessageId}`,
+    `References: ${inReplyToMimeMessageId}`,
+  ], fromName, fromEmail);
+
+  const res = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: { raw, threadId },
+  });
+
+  return { id: res.data.id, threadId: res.data.threadId, mimeMessageId };
 }
 
 export async function createDraft(
@@ -105,7 +173,8 @@ export async function createDraft(
   const subject = processTemplate(subjectTemplate, contact, false);
   const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
 
-  const rawMessage = createMimeMessage(contact.email, subject, body);
+  const mimeMessageId = `<${crypto.randomUUID()}@mail.gmail.com>`;
+  const rawMessage = createMimeMessage(contact.email, subject, body, mimeMessageId);
 
   const res = await gmail.users.drafts.create({
     userId: "me",

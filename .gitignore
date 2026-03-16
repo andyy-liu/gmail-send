@@ -42,3 +42,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# claude code
+.claude/
+dev/
+repomix-output.xml
+CLAUDE_INTEGRATION_GUIDE.md

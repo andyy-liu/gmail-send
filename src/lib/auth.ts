@@ -8,7 +8,7 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
       authorization: {
         params: {
-          scope: "openid email profile https://www.googleapis.com/auth/gmail.compose",
+          scope: "openid email profile https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata",
           prompt: "consent",
           access_type: "offline",
           response_type: "code",

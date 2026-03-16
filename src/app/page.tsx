@@ -1,30 +1,79 @@
 "use client";
 
 import { useSession, signIn, signOut } from "next-auth/react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { ContactTable } from "@/components/ContactTable";
 import { TemplateEditor } from "@/components/TemplateEditor";
 import { SignatureDialog } from "@/components/SignatureDialog";
 import { ScheduledJobsPanel } from "@/components/ScheduledJobsPanel";
-import { Contact } from "@/lib/gmail";
+import { BatchTabs } from "@/components/BatchTabs";
+import { Batch, createBatch, migrateLegacyData } from "@/lib/batches";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, SendIcon, LogOut, PenLine, Clock } from "lucide-react";
+import { Loader2, SendIcon, LogOut, PenLine, Clock, FileText, CornerDownLeft } from "lucide-react";
 
 export default function Home() {
   const { data: session, status } = useSession();
-  const [subject, setSubject] = useLocalStorage("gmailsend_subject", "");
-  const [body, setBody] = useLocalStorage("gmailsend_body", "");
+  const [batches, setBatches] = useLocalStorage<Batch[]>("gmailsend_batches", []);
+  const [activeBatchId, setActiveBatchId] = useState<string>("");
   const [signature, setSignature] = useLocalStorage("gmailsend_signature", "");
-  const [contacts, setContacts] = useLocalStorage<Contact[]>("gmailsend_contacts", [
-    { email: "", firstName: "", company: "" },
-  ]);
   const [scheduledAt, setScheduledAt] = useLocalStorage("gmailsend_scheduled_at", "");
   const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [sigDialogOpen, setSigDialogOpen] = useState(false);
+  const [sendMode, setSendMode] = useState<"draft" | "send">("draft");
+
+  // Migration / init: runs once client-side
+  useEffect(() => {
+    if (batches.length === 0) {
+      const migrated = migrateLegacyData();
+      const initial = migrated ?? [createBatch("Batch 1")];
+      setBatches(initial);
+      setActiveBatchId(initial[0].id);
+    } else if (!activeBatchId || !batches.find((b) => b.id === activeBatchId)) {
+      setActiveBatchId(batches[0].id);
+    }
+  }, []); // eslint-disable-line
+
+  const activeBatch = batches.find((b) => b.id === activeBatchId) ?? batches[0];
+
+  function updateActiveBatch(patch: Partial<Batch>) {
+    setBatches((prev) => prev.map((b) => (b.id === activeBatchId ? { ...b, ...patch } : b)));
+  }
+
+  function handleNewBatch() {
+    const batch = createBatch(`Batch ${batches.length + 1}`);
+    setBatches((prev) => [...prev, batch]);
+    setActiveBatchId(batch.id);
+  }
+
+  function handleRenameBatch(id: string, name: string) {
+    setBatches((prev) => prev.map((b) => (b.id === id ? { ...b, name } : b)));
+  }
+
+  function handleDeleteBatch(id: string) {
+    if (batches.length === 1) return;
+    const next = batches.find((b) => b.id !== id);
+    setBatches((prev) => prev.filter((b) => b.id !== id));
+    if (id === activeBatchId && next) setActiveBatchId(next.id);
+  }
+
+  function handleFollowUpBatch() {
+    if (!activeBatch?.sentResults?.length) return;
+    const sentEmails = new Set(activeBatch.sentResults.map((r) => r.email));
+    const followUpContacts = activeBatch.contacts.filter((c) => sentEmails.has(c.email));
+    if (followUpContacts.length === 0) return;
+    const followUp = createBatch(`Follow Up — ${activeBatch.name}`, {
+      parentBatchId: activeBatch.id,
+      subject: activeBatch.subject,
+      body: "",
+      contacts: followUpContacts,
+    });
+    setBatches((prev) => [...prev, followUp]);
+    setActiveBatchId(followUp.id);
+  }
 
   if (status === "loading") {
     return (
@@ -57,22 +106,28 @@ export default function Home() {
     setIsSubmitting(true);
 
     try {
-      if (!subject || !body) throw new Error("Subject and Body are required.");
-      if (contacts.length === 0) throw new Error("At least one contact is required.");
+      if (!activeBatch) throw new Error("No active batch.");
+      if (!activeBatch.subject || !activeBatch.body) throw new Error("Subject and Body are required.");
+      if (activeBatch.contacts.length === 0) throw new Error("At least one contact is required.");
 
-      for (let i = 0; i < contacts.length; i++) {
-        const c = contacts[i];
+      for (let i = 0; i < activeBatch.contacts.length; i++) {
+        const c = activeBatch.contacts[i];
         if (!c.email || !c.firstName || !c.company) {
           throw new Error(`Row ${i + 1} is missing fields. All fields are required.`);
         }
       }
 
       if (scheduledAt) {
-        // Scheduled send path
         const res = await fetch("/api/send/schedule", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ subject, body, signature, contacts, scheduledAt }),
+          body: JSON.stringify({
+            subject: activeBatch.subject,
+            body: activeBatch.body,
+            signature,
+            contacts: activeBatch.contacts,
+            scheduledAt,
+          }),
         });
 
         const data = await res.json();
@@ -84,12 +139,59 @@ export default function Home() {
           text: `Scheduled ${data.count} email(s) to send at ${formatted}.`,
         });
         setScheduleRefreshKey((k) => k + 1);
+        updateActiveBatch({ status: "scheduled" });
+      } else if (sendMode === "send" || activeBatch.parentBatchId) {
+        let parentThreadIds: Record<string, string> | undefined;
+        let parentMimeMessageIds: Record<string, string> | undefined;
+        if (activeBatch.parentBatchId) {
+          const parent = batches.find((b) => b.id === activeBatch.parentBatchId);
+          if (parent?.sentResults?.length) {
+            parentThreadIds = Object.fromEntries(parent.sentResults.map((r) => [r.email, r.threadId]));
+            parentMimeMessageIds = Object.fromEntries(parent.sentResults.map((r) => [r.email, r.mimeMessageId]));
+          }
+        }
+        const res = await fetch("/api/send/now", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            subject: activeBatch.subject,
+            body: activeBatch.body,
+            signature,
+            contacts: activeBatch.contacts,
+            ...(parentThreadIds && { parentThreadIds, parentMimeMessageIds }),
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to send emails.");
+
+        if (data.errors && data.errors.length > 0) {
+          setMessage({
+            type: "error",
+            text: `Sent ${data.results?.length || 0} email(s), but failed on ${data.errors.length}. See console.`,
+          });
+          console.error("Send errors:", data.errors);
+        } else {
+          setMessage({
+            type: "success",
+            text: `Successfully sent ${data.results.length} email(s)!`,
+          });
+          updateActiveBatch({
+            status: "sent",
+            sentAt: new Date().toISOString(),
+            sentResults: data.results,
+          });
+        }
       } else {
-        // Immediate drafts path
         const res = await fetch("/api/drafts/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ subject, body, signature, contacts }),
+          body: JSON.stringify({
+            subject: activeBatch.subject,
+            body: activeBatch.body,
+            signature,
+            contacts: activeBatch.contacts,
+          }),
         });
 
         const data = await res.json();
@@ -105,6 +207,11 @@ export default function Home() {
           setMessage({
             type: "success",
             text: `Successfully created ${data.results.length} draft(s)!`,
+          });
+          updateActiveBatch({
+            status: "sent",
+            sentAt: new Date().toISOString(),
+            sentResults: data.results,
           });
         }
       }
@@ -138,28 +245,83 @@ export default function Home() {
       </header>
 
       <main className="max-w-4xl mx-auto p-6 lg:p-8 mt-4 space-y-10">
-          <section className="space-y-4">
-            <div className="space-y-1">
-              <h2 className="text-lg font-semibold tracking-tight">1. Master Template</h2>
-              <p className="text-sm text-neutral-500">Use {`{{FirstName}}`}, {`{{Company}}`}, and {`{{Signature}}`} as variables.</p>
-            </div>
-            <TemplateEditor
-              subject={subject} setSubject={setSubject}
-              body={body} setBody={setBody}
-            />
-          </section>
+        {batches.length > 0 && activeBatch && (
+          <BatchTabs
+            batches={batches}
+            activeBatchId={activeBatchId}
+            onSelect={setActiveBatchId}
+            onRename={handleRenameBatch}
+            onDelete={handleDeleteBatch}
+            onNew={handleNewBatch}
+          />
+        )}
 
-          <section className="space-y-4">
-            <div className="space-y-1">
-              <h2 className="text-lg font-semibold tracking-tight">2. Contact Variables</h2>
+        {activeBatch && (
+          <>
+            <section className="space-y-4">
+              <p className="text-sm text-neutral-500">Use {`{{FirstName}}`}, {`{{Company}}`}, and {`{{Signature}}`} as variables.</p>
+              <TemplateEditor
+                subject={activeBatch.subject}
+                setSubject={(v) => updateActiveBatch({ subject: v })}
+                body={activeBatch.body}
+                setBody={(v) => updateActiveBatch({ body: v })}
+                subjectReadOnly={!!activeBatch.parentBatchId}
+              />
+            </section>
+
+            <section className="space-y-4">
               <p className="text-sm text-neutral-500">Add recipients to generate drafts for.</p>
-            </div>
-            <ContactTable
-              contacts={contacts} setContacts={setContacts}
-            />
-          </section>
+              <ContactTable
+                contacts={activeBatch.contacts}
+                setContacts={(v) => updateActiveBatch({ contacts: v })}
+              />
+            </section>
+
+            {activeBatch.status === "sent" && activeBatch.sentResults && activeBatch.sentResults.length > 0 && (
+              <div className="border-t pt-6 flex flex-col items-start gap-1">
+                <button
+                  onClick={handleFollowUpBatch}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl border border-neutral-200 dark:border-neutral-700 text-sm font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+                >
+                  <CornerDownLeft className="h-4 w-4" />
+                  Follow Up on this batch
+                </button>
+                <p className="text-xs text-neutral-400 ml-1">
+                  Creates a new batch threaded to the {activeBatch.sentResults.length} original email(s)
+                </p>
+              </div>
+            )}
+          </>
+        )}
 
         <div className="max-w-2xl mx-auto mt-12 pt-8 border-t flex flex-col items-center space-y-4">
+          {!scheduledAt && !activeBatch?.parentBatchId && (
+            <div className="flex items-center rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 p-0.5 gap-0.5">
+              <button
+                onClick={() => setSendMode("draft")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  sendMode === "draft"
+                    ? "bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-sm"
+                    : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300"
+                }`}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                Save as Draft
+              </button>
+              <button
+                onClick={() => setSendMode("send")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  sendMode === "send"
+                    ? "bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-sm"
+                    : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300"
+                }`}
+              >
+                <SendIcon className="h-3.5 w-3.5" />
+                Send Now
+              </button>
+            </div>
+          )}
+
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <label className="flex items-center gap-2 text-sm text-neutral-500 font-medium whitespace-nowrap">
               <Clock className="h-4 w-4" />
@@ -190,18 +352,18 @@ export default function Home() {
             {isSubmitting ? (
               <>
                 <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                {scheduledAt ? "Scheduling..." : "Generating Drafts..."}
+                {scheduledAt ? "Scheduling..." : sendMode === "send" ? "Sending..." : "Generating Drafts..."}
               </>
             ) : (
               <>
                 <SendIcon className="mr-2 h-4 w-4" />
-                {scheduledAt ? "Schedule Send" : "Create Drafts in Gmail"}
+                {scheduledAt ? "Schedule Send" : sendMode === "send" ? "Send Now" : "Create Drafts in Gmail"}
               </>
             )}
           </Button>
 
           {message && (
-            <div className={`mt-6 px-4 py-3 pb-3 rounded-lg text-sm font-medium w-full text-center border shadow-sm ${message.type === 'error' ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-900' : 'bg-green-50 text-green-700 border-green-200 dark:bg-green-950/50 dark:text-green-300 dark:border-green-900'}`}>
+            <div className={`mt-6 px-4 py-3 pb-3 rounded-lg text-sm font-medium w-full text-center border shadow-sm ${message.type === "error" ? "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-900" : "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/50 dark:text-green-300 dark:border-green-900"}`}>
               {message.text}
             </div>
           )}
