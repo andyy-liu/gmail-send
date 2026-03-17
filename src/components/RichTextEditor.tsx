@@ -59,16 +59,19 @@ export function RichTextEditor({ content, onChange, placeholder }: RichTextEdito
     immediatelyRender: false,
   });
 
-  // Sync content from localStorage on mount and handle external clear
+  // Sync editor content when the active batch changes or on initial load.
+  // emitUpdate: false / clearContent(false) prevents onChange from firing
+  // during sync, avoiding stale state overwrites (e.g. Tiptap v3 stripping hrefs).
   useEffect(() => {
     if (!editor) return;
     const current = editor.getHTML();
-    if (content === "" && current !== "<p></p>") {
-      // External clear
-      editor.commands.clearContent(true);
-    } else if (content !== "" && (current === "<p></p>" || current === "")) {
-      // Restore from localStorage on first load
-      editor.commands.setContent(content);
+    const empty = (h: string) => !h || h === "<p></p>";
+    if (content === current) return;
+    if (empty(content) && empty(current)) return;
+    if (empty(content)) {
+      editor.commands.clearContent(false);
+    } else {
+      editor.commands.setContent(content, { emitUpdate: false });
     }
   }, [editor, content]);
 
@@ -89,7 +92,7 @@ export function RichTextEditor({ content, onChange, placeholder }: RichTextEdito
   return (
     <div className="rounded-xl border bg-white dark:bg-neutral-900 shadow-sm overflow-hidden focus-within:ring-1 focus-within:ring-ring transition-shadow">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-0.5 p-2 border-b bg-neutral-50 dark:bg-neutral-800/60">
+      <div className="flex items-center gap-0.5 p-2 border-b bg-neutral-50 dark:bg-neutral-800/60 overflow-x-auto">
         {/* Text Format */}
         <Toggle size="sm" pressed={editor.isActive("bold")} onPressedChange={() => editor.chain().focus().toggleBold().run()} aria-label="Bold">
           <Bold className="h-3.5 w-3.5" />

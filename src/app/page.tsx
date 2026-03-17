@@ -44,7 +44,10 @@ export default function Home() {
   }
 
   function handleNewBatch() {
-    const batch = createBatch(`Batch ${batches.length + 1}`);
+    const existingNames = new Set(batches.map((b) => b.name));
+    let num = batches.length + 1;
+    while (existingNames.has(`Batch ${num}`)) num++;
+    const batch = createBatch(`Batch ${num}`);
     setBatches((prev) => [...prev, batch]);
     setActiveBatchId(batch.id);
   }
