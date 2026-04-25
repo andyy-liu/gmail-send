@@ -1,82 +1,47 @@
 "use client";
 
 import { useSession, signIn, signOut } from "next-auth/react";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useBatches } from "@/hooks/useBatches";
+import { useEmailSend } from "@/hooks/useEmailSend";
 import { ContactTable } from "@/components/ContactTable";
 import { TemplateEditor } from "@/components/TemplateEditor";
 import { SignatureDialog } from "@/components/SignatureDialog";
 import { ScheduledJobsPanel } from "@/components/ScheduledJobsPanel";
 import { BatchTabs } from "@/components/BatchTabs";
-import { Batch, createBatch, migrateLegacyData } from "@/lib/batches";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, SendIcon, LogOut, PenLine, Clock, FileText, CornerDownLeft } from "lucide-react";
 
 export default function Home() {
   const { data: session, status } = useSession();
-  const [batches, setBatches] = useLocalStorage<Batch[]>("gmailsend_batches", []);
-  const [activeBatchId, setActiveBatchId] = useState<string>("");
   const [signature, setSignature] = useLocalStorage("gmailsend_signature", "");
-  const [scheduledAt, setScheduledAt] = useLocalStorage("gmailsend_scheduled_at", "");
+  const [scheduledAt, setScheduledAt] = useState("");
   const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [sigDialogOpen, setSigDialogOpen] = useState(false);
   const [sendMode, setSendMode] = useState<"draft" | "send">("draft");
 
-  // Migration / init: runs once client-side
-  useEffect(() => {
-    if (batches.length === 0) {
-      const migrated = migrateLegacyData();
-      const initial = migrated ?? [createBatch("Batch 1")];
-      setBatches(initial);
-      setActiveBatchId(initial[0].id);
-    } else if (!activeBatchId || !batches.find((b) => b.id === activeBatchId)) {
-      setActiveBatchId(batches[0].id);
-    }
-  }, []); // eslint-disable-line
+  const {
+    batches,
+    activeBatch,
+    activeBatchId,
+    setActiveBatchId,
+    updateActiveBatch,
+    handleNewBatch,
+    handleRenameBatch,
+    handleDeleteBatch,
+    handleFollowUpBatch,
+  } = useBatches();
 
-  const activeBatch = batches.find((b) => b.id === activeBatchId) ?? batches[0];
-
-  function updateActiveBatch(patch: Partial<Batch>) {
-    setBatches((prev) => prev.map((b) => (b.id === activeBatchId ? { ...b, ...patch } : b)));
-  }
-
-  function handleNewBatch() {
-    const existingNames = new Set(batches.map((b) => b.name));
-    let num = batches.length + 1;
-    while (existingNames.has(`Batch ${num}`)) num++;
-    const batch = createBatch(`Batch ${num}`);
-    setBatches((prev) => [...prev, batch]);
-    setActiveBatchId(batch.id);
-  }
-
-  function handleRenameBatch(id: string, name: string) {
-    setBatches((prev) => prev.map((b) => (b.id === id ? { ...b, name } : b)));
-  }
-
-  function handleDeleteBatch(id: string) {
-    if (batches.length === 1) return;
-    const next = batches.find((b) => b.id !== id);
-    setBatches((prev) => prev.filter((b) => b.id !== id));
-    if (id === activeBatchId && next) setActiveBatchId(next.id);
-  }
-
-  function handleFollowUpBatch() {
-    if (!activeBatch?.sentResults?.length) return;
-    const sentEmails = new Set(activeBatch.sentResults.map((r) => r.email));
-    const followUpContacts = activeBatch.contacts.filter((c) => sentEmails.has(c.email));
-    if (followUpContacts.length === 0) return;
-    const followUp = createBatch(`Follow Up — ${activeBatch.name}`, {
-      parentBatchId: activeBatch.id,
-      subject: activeBatch.subject,
-      body: "",
-      contacts: followUpContacts,
-    });
-    setBatches((prev) => [...prev, followUp]);
-    setActiveBatchId(followUp.id);
-  }
+  const { isSubmitting, message, submit } = useEmailSend({
+    activeBatch,
+    batches,
+    signature,
+    scheduledAt,
+    onBatchUpdate: updateActiveBatch,
+    onScheduled: () => setScheduleRefreshKey((k) => k + 1),
+  });
 
   if (status === "loading") {
     return (
@@ -103,131 +68,6 @@ export default function Home() {
       </div>
     );
   }
-
-  const handleCreateDrafts = async () => {
-    setMessage(null);
-    setIsSubmitting(true);
-
-    try {
-      if (!activeBatch) throw new Error("No active batch.");
-      if (!activeBatch.subject || !activeBatch.body) throw new Error("Subject and Body are required.");
-      if (activeBatch.contacts.length === 0) throw new Error("At least one contact is required.");
-
-      for (let i = 0; i < activeBatch.contacts.length; i++) {
-        const c = activeBatch.contacts[i];
-        if (!c.email || !c.firstName || !c.company) {
-          throw new Error(`Row ${i + 1} is missing fields. All fields are required.`);
-        }
-      }
-
-      if (scheduledAt) {
-        const res = await fetch("/api/send/schedule", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            subject: activeBatch.subject,
-            body: activeBatch.body,
-            signature,
-            contacts: activeBatch.contacts,
-            scheduledAt,
-          }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to schedule send.");
-
-        const formatted = new Date(data.scheduledAt).toLocaleString();
-        setMessage({
-          type: "success",
-          text: `Scheduled ${data.count} email(s) to send at ${formatted}.`,
-        });
-        setScheduleRefreshKey((k) => k + 1);
-        updateActiveBatch({ status: "scheduled" });
-      } else if (sendMode === "send" || activeBatch.parentBatchId) {
-        let parentThreadIds: Record<string, string> | undefined;
-        let parentMimeMessageIds: Record<string, string> | undefined;
-        if (activeBatch.parentBatchId) {
-          const parent = batches.find((b) => b.id === activeBatch.parentBatchId);
-          if (parent?.sentResults?.length) {
-            parentThreadIds = {};
-            parentMimeMessageIds = {};
-            for (const r of parent.sentResults) {
-              parentThreadIds[r.email] = r.threadId;
-              parentMimeMessageIds[r.email] = r.mimeMessageId;
-            }
-          }
-        }
-        const res = await fetch("/api/send/now", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            subject: activeBatch.subject,
-            body: activeBatch.body,
-            signature,
-            contacts: activeBatch.contacts,
-            ...(parentThreadIds && { parentThreadIds, parentMimeMessageIds }),
-          }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to send emails.");
-
-        if (data.errors && data.errors.length > 0) {
-          setMessage({
-            type: "error",
-            text: `Sent ${data.results?.length || 0} email(s), but failed on ${data.errors.length}. See console.`,
-          });
-          console.error("Send errors:", data.errors);
-        } else {
-          setMessage({
-            type: "success",
-            text: `Successfully sent ${data.results.length} email(s)!`,
-          });
-          updateActiveBatch({
-            status: "sent",
-            sentAt: new Date().toISOString(),
-            sentResults: data.results,
-          });
-        }
-      } else {
-        const res = await fetch("/api/drafts/create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            subject: activeBatch.subject,
-            body: activeBatch.body,
-            signature,
-            contacts: activeBatch.contacts,
-          }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to create drafts.");
-
-        if (data.errors && data.errors.length > 0) {
-          setMessage({
-            type: "error",
-            text: `Created ${data.results?.length || 0} drafts, but failed on ${data.errors.length}. See console.`,
-          });
-          console.error("Draft errors:", data.errors);
-        } else {
-          setMessage({
-            type: "success",
-            text: `Successfully created ${data.results.length} draft(s)!`,
-          });
-          updateActiveBatch({
-            status: "sent",
-            sentAt: new Date().toISOString(),
-            sentResults: data.results,
-          });
-        }
-      }
-    } catch (err: unknown) {
-      setMessage({ type: "error", text: err instanceof Error ? err.message : "An unknown error occurred" });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   return (
     <div className="min-h-screen pb-20">
@@ -329,29 +169,31 @@ export default function Home() {
             </div>
           )}
 
-          {!activeBatch?.parentBatchId && <div className="flex items-center gap-2 w-full sm:w-auto">
-            <label className="flex items-center gap-2 text-sm text-neutral-500 font-medium whitespace-nowrap">
-              <Clock className="h-4 w-4" />
-              Schedule for
-            </label>
-            <input
-              type="datetime-local"
-              value={scheduledAt}
-              onChange={(e) => setScheduledAt(e.target.value)}
-              className="flex-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-neutral-400"
-            />
-            {scheduledAt && (
-              <button
-                onClick={() => setScheduledAt("")}
-                className="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
-              >
-                Clear
-              </button>
-            )}
-          </div>}
+          {!activeBatch?.parentBatchId && (
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <label className="flex items-center gap-2 text-sm text-neutral-500 font-medium whitespace-nowrap">
+                <Clock className="h-4 w-4" />
+                Schedule for
+              </label>
+              <input
+                type="datetime-local"
+                value={scheduledAt}
+                onChange={(e) => setScheduledAt(e.target.value)}
+                className="flex-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-neutral-400"
+              />
+              {scheduledAt && (
+                <button
+                  onClick={() => setScheduledAt("")}
+                  className="text-xs text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
 
           <Button
-            onClick={handleCreateDrafts}
+            onClick={() => submit(sendMode)}
             disabled={isSubmitting}
             size="lg"
             className="w-full sm:w-auto min-w-[240px] rounded-xl h-12 text-base font-medium shadow-sm"
@@ -370,7 +212,11 @@ export default function Home() {
           </Button>
 
           {message && (
-            <div className={`mt-6 px-4 py-3 pb-3 rounded-lg text-sm font-medium w-full text-center border shadow-sm ${message.type === "error" ? "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-900" : "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/50 dark:text-green-300 dark:border-green-900"}`}>
+            <div className={`mt-6 px-4 py-3 pb-3 rounded-lg text-sm font-medium w-full text-center border shadow-sm ${
+              message.type === "error"
+                ? "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-900"
+                : "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/50 dark:text-green-300 dark:border-green-900"
+            }`}>
               {message.text}
             </div>
           )}

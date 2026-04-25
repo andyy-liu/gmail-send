@@ -1,5 +1,9 @@
 import { Contact } from "./gmail";
 
+export interface ContactRow extends Contact {
+  id: string;
+}
+
 export interface SentResult {
   email: string;
   messageId: string;
@@ -12,12 +16,15 @@ export interface Batch {
   name: string;
   subject: string;
   body: string;
-  contacts: Contact[];
+  contacts: ContactRow[];
   parentBatchId?: string;
   sentResults?: SentResult[];
   status: "active" | "sent" | "scheduled";
   createdAt: string;
   sentAt?: string;
+  // Canvas fields
+  scheduledAt?: string;
+  scheduledDelay?: { value: number; unit: "days" | "hours" };
 }
 
 export function createBatch(name: string, overrides?: Partial<Batch>): Batch {
@@ -26,7 +33,7 @@ export function createBatch(name: string, overrides?: Partial<Batch>): Batch {
     name,
     subject: "",
     body: "",
-    contacts: [{ email: "", firstName: "", company: "" }],
+    contacts: [{ id: crypto.randomUUID(), email: "", firstName: "", company: "" }],
     status: "active",
     createdAt: new Date().toISOString(),
     ...overrides,
@@ -46,10 +53,11 @@ export function migrateLegacyData(): Batch[] | null {
   const body = localStorage.getItem("gmailsend_body") ?? "";
   const contactsRaw = localStorage.getItem("gmailsend_contacts");
 
-  let contacts: Contact[] = [{ email: "", firstName: "", company: "" }];
+  let contacts: ContactRow[] = [{ id: crypto.randomUUID(), email: "", firstName: "", company: "" }];
   if (contactsRaw) {
     try {
-      contacts = JSON.parse(contactsRaw);
+      const parsed: Contact[] = JSON.parse(contactsRaw);
+      contacts = parsed.map((c) => ({ id: crypto.randomUUID(), ...c }));
     } catch {
       // ignore
     }
