@@ -1,9 +1,10 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ContactRow } from "@/lib/batches";
 import { Trash2, Plus, Upload, Eraser } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface ContactTableProps {
   contacts: ContactRow[];
@@ -61,6 +62,8 @@ function parseCSV(text: string): ContactRow[] {
 
 export function ContactTable({ contacts, setContacts }: ContactTableProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // null = closed, number >= 0 = row index to delete, -1 = clear all
+  const [confirmTarget, setConfirmTarget] = useState<number | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -129,7 +132,7 @@ export function ContactTable({ contacts, setContacts }: ContactTableProps) {
                   />
                 </TableCell>
                 <TableCell className="text-right">
-                  <Button variant="ghost" size="icon" onClick={() => removeContact(i)} className="text-neutral-400 hover:text-red-500">
+                  <Button variant="ghost" size="icon" onClick={() => setConfirmTarget(i)} className="text-neutral-400 hover:text-red-500">
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </TableCell>
@@ -153,13 +156,23 @@ export function ContactTable({ contacts, setContacts }: ContactTableProps) {
           Import CSV
         </Button>
         {contacts.length > 0 && (
-          <Button variant="outline" size="sm" onClick={() => setContacts([])} className="gap-2 text-neutral-400 hover:text-red-500">
+          <Button variant="outline" size="sm" onClick={() => setConfirmTarget(-1)} className="gap-2 text-neutral-400 hover:text-red-500">
             <Eraser className="h-4 w-4" />
             Clear All
           </Button>
         )}
         <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
       </div>
+      <ConfirmDialog
+        open={confirmTarget !== null}
+        onOpenChange={(open) => { if (!open) setConfirmTarget(null); }}
+        title={confirmTarget === -1 ? "Clear all contacts?" : "Remove contact?"}
+        description={confirmTarget === -1 ? "This will remove all contacts from the list." : "This will remove this contact from the list."}
+        onConfirm={() => {
+          if (confirmTarget === -1) setContacts([]);
+          else if (confirmTarget !== null) removeContact(confirmTarget);
+        }}
+      />
     </div>
   );
 }

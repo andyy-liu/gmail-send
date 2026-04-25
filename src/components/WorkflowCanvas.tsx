@@ -16,6 +16,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { Batch } from "@/lib/batches";
 import { Mail, Users, Trash2, Plus } from "lucide-react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 const NODE_W = 260;
@@ -51,6 +52,7 @@ type EmailNodeData = {
 function EmailNodeComponent({ data }: NodeProps) {
   const { batch, isSelected, onDelete } = data as EmailNodeData;
   const [hovered, setHovered] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const timingLabel = useMemo(() => {
     if (batch.parentBatchId) {
@@ -115,7 +117,7 @@ function EmailNodeComponent({ data }: NodeProps) {
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
-            onDelete(batch.id);
+            setConfirmOpen(true);
           }}
           title="Delete node"
         >
@@ -153,6 +155,13 @@ function EmailNodeComponent({ data }: NodeProps) {
         type="source"
         position={Position.Bottom}
         className="!w-2 !h-2 !bg-neutral-300 !border-0 !rounded-full"
+      />
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Delete email?"
+        description="This will permanently delete this email node and its contents."
+        onConfirm={() => onDelete(batch.id)}
       />
     </div>
   );

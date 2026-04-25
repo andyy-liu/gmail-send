@@ -11,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface SidebarProps {
   campaigns: Batch[];
@@ -36,6 +37,7 @@ export function Sidebar({
   const [collapsed, setCollapsed] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -131,7 +133,7 @@ export function Sidebar({
                       className="text-xs text-red-600"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDelete(c.id);
+                        setConfirmDeleteId(c.id);
                       }}
                     >
                       Delete
@@ -164,6 +166,14 @@ export function Sidebar({
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        onOpenChange={(open) => { if (!open) setConfirmDeleteId(null); }}
+        title="Delete campaign?"
+        description="This will permanently delete this campaign and all its emails."
+        onConfirm={() => { if (confirmDeleteId) onDelete(confirmDeleteId); }}
+      />
 
       {/* Collapse toggle */}
       <button
