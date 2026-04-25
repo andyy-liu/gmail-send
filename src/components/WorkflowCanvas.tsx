@@ -15,13 +15,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Batch } from "@/lib/batches";
-import { Mail, Users, MoreHorizontal, Plus } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Mail, Users, Trash2, Plus } from "lucide-react";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 const NODE_W = 260;
@@ -114,28 +108,19 @@ function EmailNodeComponent({ data }: NodeProps) {
       {/* Timing bar */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-neutral-200 rounded-t">
         <span className="text-[11px] font-medium text-neutral-700 truncate">{timingLabel}</span>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            onClick={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-            className={`p-0.5 rounded hover:bg-neutral-300 transition-opacity ${
-              hovered ? "opacity-100" : "opacity-0"
-            }`}
-          >
-            <MoreHorizontal className="h-3.5 w-3.5 text-neutral-600" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent side="right" align="start" className="w-24">
-            <DropdownMenuItem
-              className="text-xs text-red-600"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(batch.id);
-              }}
-            >
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <button
+          className={`p-0.5 rounded hover:bg-red-100 hover:text-red-600 text-neutral-500 transition-all ${
+            hovered ? "opacity-100" : "opacity-0"
+          }`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(batch.id);
+          }}
+          title="Delete node"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {/* Body */}
