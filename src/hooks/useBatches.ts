@@ -6,14 +6,13 @@ import { Batch, createBatch, migrateLegacyData } from "@/lib/batches";
 
 export function useBatches() {
   const [batches, setBatches] = useLocalStorage<Batch[]>("gmailsend_batches", []);
-  const [activeCampaignId, setActiveCampaignId] = useState<string>("");
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
 
   useEffect(() => {
     if (batches.length === 0) {
       const migrated = migrateLegacyData();
       const initial = migrated ?? [createBatch("Campaign 1")];
       setBatches(initial);
-      setActiveCampaignId(initial[0].id);
     } else {
       if (batches.some((b) => b.contacts.some((c) => !c.id))) {
         setBatches((prev) =>
@@ -23,14 +22,13 @@ export function useBatches() {
           }))
         );
       }
-      if (!activeCampaignId || !batches.find((b) => b.id === activeCampaignId)) {
-        const first = batches.find((b) => !b.parentBatchId) ?? batches[0];
-        setActiveCampaignId(first.id);
-      }
     }
-  }, []); // eslint-disable-line
+  }, [batches, setBatches]);
 
   const campaigns = batches.filter((b) => !b.parentBatchId);
+  const activeCampaignId =
+    (selectedCampaignId && batches.find((b) => b.id === selectedCampaignId)?.id) ??
+    (batches.find((b) => !b.parentBatchId)?.id ?? batches[0]?.id ?? "");
   const activeCampaign = batches.find((b) => b.id === activeCampaignId);
 
   const getCampaignChain = useCallback(
@@ -61,7 +59,7 @@ export function useBatches() {
     while (existingNames.has(`Campaign ${num}`)) num++;
     const batch = createBatch(`Campaign ${num}`);
     setBatches((prev) => [...prev, batch]);
-    setActiveCampaignId(batch.id);
+    setSelectedCampaignId(batch.id);
     return batch.id;
   }
 
@@ -76,7 +74,7 @@ export function useBatches() {
     setBatches(remaining);
     if (id === activeCampaignId) {
       const next = remaining.find((b) => !b.parentBatchId);
-      setActiveCampaignId(next?.id ?? "");
+      setSelectedCampaignId(next?.id ?? "");
     }
   }
 
@@ -104,7 +102,7 @@ export function useBatches() {
     setBatches(remaining);
     if (toDelete.has(activeCampaignId)) {
       const next = remaining.find((b) => !b.parentBatchId);
-      setActiveCampaignId(next?.id ?? "");
+      setSelectedCampaignId(next?.id ?? "");
     }
   }
 
@@ -124,7 +122,7 @@ export function useBatches() {
     campaigns,
     activeCampaign,
     activeCampaignId,
-    setActiveCampaignId,
+    setActiveCampaignId: setSelectedCampaignId,
     getCampaignChain,
     updateBatch,
     handleNewCampaign,
