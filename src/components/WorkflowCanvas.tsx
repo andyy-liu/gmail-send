@@ -52,11 +52,10 @@ type EmailNodeData = {
   batch: Batch;
   isSelected: boolean;
   onDelete: (id: string) => void;
-  onClick: (id: string) => void;
 };
 
 function EmailNodeComponent({ data }: NodeProps) {
-  const { batch, isSelected, onDelete, onClick } = data as EmailNodeData;
+  const { batch, isSelected, onDelete } = data as EmailNodeData;
   const [hovered, setHovered] = useState(false);
 
   const timingLabel = useMemo(() => {
@@ -103,7 +102,6 @@ function EmailNodeComponent({ data }: NodeProps) {
         isSelected ? "border-neutral-400 bg-neutral-100" : "border-neutral-200 hover:bg-neutral-50"
       }`}
       style={{ width: NODE_W, height: EMAIL_H }}
-      onClick={() => onClick(batch.id)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -119,6 +117,7 @@ function EmailNodeComponent({ data }: NodeProps) {
         <DropdownMenu>
           <DropdownMenuTrigger
             onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
             className={`p-0.5 rounded hover:bg-neutral-300 transition-opacity ${
               hovered ? "opacity-100" : "opacity-0"
             }`}
@@ -186,7 +185,6 @@ function GhostNodeComponent({ data }: NodeProps) {
     <div
       className="flex items-center justify-center rounded border-2 border-dashed border-neutral-300 bg-transparent cursor-pointer hover:border-neutral-400 hover:bg-neutral-50 transition-colors duration-150"
       style={{ width: NODE_W, height: GHOST_H }}
-      onClick={() => onAdd(parentId)}
     >
       <Handle
         type="target"
@@ -245,7 +243,6 @@ export function WorkflowCanvas({
           batch,
           isSelected: batch.id === selectedNodeId,
           onDelete: onDeleteNode,
-          onClick: onNodeClick,
         },
         draggable: false,
         selectable: false,
@@ -281,7 +278,7 @@ export function WorkflowCanvas({
     });
 
     return { nodes, edges };
-  }, [chain, selectedNodeId, onNodeClick, onDeleteNode, onAddFollowUp]);
+  }, [chain, selectedNodeId, onDeleteNode, onAddFollowUp]);
 
   return (
     <div className="w-full h-full">
@@ -297,6 +294,14 @@ export function WorkflowCanvas({
         panOnScroll
         zoomOnScroll
         proOptions={{ hideAttribution: true }}
+        onNodeClick={(_, node) => {
+          if (node.type === "emailNode") {
+            onNodeClick(node.id);
+          } else if (node.type === "ghostNode") {
+            const d = node.data as { parentId: string; onAdd: (id: string) => void };
+            d.onAdd(d.parentId);
+          }
+        }}
       >
         <Background
           variant={BackgroundVariant.Dots}
