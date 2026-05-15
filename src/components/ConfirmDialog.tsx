@@ -1,5 +1,6 @@
 "use client";
 
+import { ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,11 +15,23 @@ interface ConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  description: string;
+  description: ReactNode;
   onConfirm: () => void;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  confirmVariant?: "default" | "outline" | "secondary" | "ghost" | "destructive" | "link";
 }
 
-export function ConfirmDialog({ open, onOpenChange, title, description, onConfirm }: ConfirmDialogProps) {
+export function ConfirmDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  onConfirm,
+  confirmLabel = "Delete",
+  cancelLabel = "Cancel",
+  confirmVariant = "destructive",
+}: ConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent showCloseButton={false}>
@@ -27,8 +40,8 @@ export function ConfirmDialog({ open, onOpenChange, title, description, onConfir
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button variant="destructive" onClick={() => { onConfirm(); onOpenChange(false); }}>Delete</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{cancelLabel}</Button>
+          <Button variant={confirmVariant} onClick={() => { onConfirm(); onOpenChange(false); }}>{confirmLabel}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

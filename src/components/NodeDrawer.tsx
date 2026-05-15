@@ -11,6 +11,7 @@ import { Batch } from "@/lib/batches";
 import { useEmailSend } from "@/hooks/useEmailSend";
 import { ContactTable } from "@/components/ContactTable";
 import { TemplateEditor } from "@/components/TemplateEditor";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface NodeDrawerProps {
   open: boolean;
@@ -30,9 +31,14 @@ export function NodeDrawer({
   onClose,
 }: NodeDrawerProps) {
   const [sendMode, setSendMode] = useState<"draft" | "send">("send");
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const isFollowUp = !!batch?.parentBatchId;
   const scheduledAt = batch?.scheduledAt ?? "";
+  const isSendAction = !scheduledAt && (sendMode === "send" || isFollowUp);
+  const needsConfirmation = !!batch && (isSendAction || !!scheduledAt);
+  const recipientCount = batch?.contacts.filter((contact) => contact.email.trim()).length ?? 0;
+  const sampleRecipients = batch?.contacts.filter((contact) => contact.email.trim()).slice(0, 4) ?? [];
 
   const { isSubmitting, submit } = useEmailSend({
     activeBatch: batch,
@@ -53,6 +59,14 @@ export function NodeDrawer({
     : sendMode === "send"
     ? "Sending..."
     : "Saving Draft...";
+
+  function handleActionClick() {
+    if (needsConfirmation) {
+      setConfirmOpen(true);
+      return;
+    }
+    submit(sendMode);
+  }
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
@@ -244,7 +258,7 @@ export function NodeDrawer({
           )}
 
           <Button
-            onClick={() => submit(sendMode)}
+            onClick={handleActionClick}
             disabled={isSubmitting || !batch}
             className="bg-neutral-900 text-white hover:bg-neutral-700 active:scale-[0.97] transition-transform w-full"
           >
@@ -261,6 +275,47 @@ export function NodeDrawer({
             )}
           </Button>
         </div>
+
+        {batch && (
+          <ConfirmDialog
+            open={confirmOpen}
+            onOpenChange={setConfirmOpen}
+            title={scheduledAt ? "Schedule this send?" : "Send these emails now?"}
+            confirmLabel={scheduledAt ? "Schedule Send" : "Send Now"}
+            confirmVariant={scheduledAt ? "default" : "destructive"}
+            description={
+              <div className="space-y-3 text-sm text-neutral-600">
+                <p>
+                  {scheduledAt
+                    ? `This will schedule ${recipientCount} email${recipientCount === 1 ? "" : "s"} for ${new Date(scheduledAt).toLocaleString()}.`
+                    : `This will immediately send ${recipientCount} email${recipientCount === 1 ? "" : "s"} through Gmail.`}
+                </p>
+                <div className="space-y-1.5 rounded border border-neutral-200 bg-neutral-50 p-3">
+                  <div>
+                    <span className="text-xs font-medium uppercase tracking-wide text-neutral-400">Subject</span>
+                    <p className="mt-0.5 text-neutral-800">{batch.subject}</p>
+                  </div>
+                  <div>
+                    <span className="text-xs font-medium uppercase tracking-wide text-neutral-400">Recipients</span>
+                    <div className="mt-1 space-y-1">
+                      {sampleRecipients.map((contact) => (
+                        <p key={contact.id} className="truncate text-neutral-700">
+                          {contact.firstName} · {contact.email}
+                        </p>
+                      ))}
+                      {recipientCount > sampleRecipients.length && (
+                        <p className="text-neutral-400">
+                          +{recipientCount - sampleRecipients.length} more
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            }
+            onConfirm={() => submit(sendMode)}
+          />
+        )}
       </SheetContent>
     </Sheet>
   );

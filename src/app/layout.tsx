@@ -2,6 +2,12 @@ import type { Metadata } from "next";
 import "./globals.css";
 import Providers from "@/components/Providers";
 import { Toaster } from "sonner";
+import { Geist, Manrope } from "next/font/google";
+import { cn } from "@/lib/utils";
+
+const manropeHeading = Manrope({ subsets: ["latin"], variable: "--font-heading" });
+
+const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: "Create Next App",
@@ -14,11 +20,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body
-        className="antialiased min-h-screen bg-neutral-50 dark:bg-neutral-950"
-        style={{ fontFamily: "Arial, Helvetica, sans-serif" }}
-      >
+    <html lang="en" suppressHydrationWarning className={cn("font-sans", geist.variable, manropeHeading.variable)}>
+      <body className="min-h-screen bg-background text-foreground antialiased">
         <Providers>
           {children}
           <Toaster position="bottom-right" richColors closeButton />
