@@ -1,0 +1,15 @@
+name = "gmail-send-cron"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Runs every minute. Change to "*/5 * * * *" for every 5 minutes.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Public, non-secret config. Replace with your deployed Next.js URL (no trailing slash).
+[vars]
+APP_URL = "https://gmail-send-andy.vercel.app"
+
+# WORKER_SECRET is set separately via:
+#   wrangler secret put WORKER_SECRET
+# It must match the WORKER_SECRET env var in your deployed Next.js app.
