@@ -19,7 +19,7 @@ export interface Batch {
   contacts: ContactRow[];
   parentBatchId?: string;
   sentResults?: SentResult[];
-  status: "active" | "sent" | "scheduled";
+  status: "active" | "drafted" | "sent" | "scheduled";
   createdAt: string;
   sentAt?: string;
   // Canvas fields

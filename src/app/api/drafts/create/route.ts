@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { createDraft, Contact } from "@/lib/gmail";
+import { validateContacts, hasCRLF } from "@/lib/validate";
 
 export async function POST(request: Request) {
   try {
@@ -16,6 +17,13 @@ export async function POST(request: Request) {
 
     if (!subject || !emailBody || !contacts || !Array.isArray(contacts)) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+    }
+    if (hasCRLF(subject)) {
+      return NextResponse.json({ error: "Invalid characters in subject" }, { status: 400 });
+    }
+    const contactError = validateContacts(contacts);
+    if (contactError) {
+      return NextResponse.json({ error: contactError }, { status: 400 });
     }
 
     const results = [];

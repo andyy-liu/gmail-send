@@ -36,7 +36,48 @@ export function useEmailSend({
         }
       }
 
-      if (scheduledAt) {
+      // Resolve follow-up parent thread info up front; used in both the
+      // immediate-send and scheduled-send branches so reply threading is
+      // preserved either way.
+      let parentThreadIds: Record<string, string> | undefined;
+      let parentMimeMessageIds: Record<string, string> | undefined;
+      if (activeBatch.parentBatchId) {
+        const parent = batches.find((b) => b.id === activeBatch.parentBatchId);
+
+        // A follow-up with a delay must wait for the parent to be sent.
+        // Without parent.sentAt we cannot compute the scheduled time and we
+        // would silently send immediately — block instead.
+        if (activeBatch.scheduledDelay && !parent?.sentAt) {
+          throw new Error("Cannot send follow-up before the parent email has been sent.");
+        }
+
+        if (parent?.status === "sent" && parent?.sentResults?.length) {
+          parentThreadIds = {};
+          parentMimeMessageIds = {};
+          for (const r of parent.sentResults) {
+            parentThreadIds[r.email] = r.threadId;
+            parentMimeMessageIds[r.email] = r.mimeMessageId;
+          }
+        }
+      }
+
+      // For follow-ups with a scheduled delay, compute the effective send time from the parent's sentAt.
+      let effectiveScheduledAt = scheduledAt;
+      if (!effectiveScheduledAt && activeBatch.parentBatchId && activeBatch.scheduledDelay) {
+        const parent = batches.find((b) => b.id === activeBatch.parentBatchId);
+        if (parent?.sentAt) {
+          const delayMs =
+            activeBatch.scheduledDelay.unit === "days"
+              ? activeBatch.scheduledDelay.value * 24 * 60 * 60 * 1000
+              : activeBatch.scheduledDelay.value * 60 * 60 * 1000;
+          const computedAt = new Date(new Date(parent.sentAt).getTime() + delayMs);
+          if (computedAt > new Date()) {
+            effectiveScheduledAt = computedAt.toISOString();
+          }
+        }
+      }
+
+      if (effectiveScheduledAt) {
         const res = await fetch("/api/send/schedule", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -45,7 +86,8 @@ export function useEmailSend({
             body: activeBatch.body,
             signature,
             contacts: activeBatch.contacts,
-            scheduledAt,
+            scheduledAt: effectiveScheduledAt,
+            ...(parentThreadIds && { parentThreadIds, parentMimeMessageIds }),
           }),
         });
         const data = await res.json();
@@ -54,19 +96,6 @@ export function useEmailSend({
         onBatchUpdate({ status: "scheduled" });
         onScheduled?.();
       } else if (sendMode === "send" || activeBatch.parentBatchId) {
-        let parentThreadIds: Record<string, string> | undefined;
-        let parentMimeMessageIds: Record<string, string> | undefined;
-        if (activeBatch.parentBatchId) {
-          const parent = batches.find((b) => b.id === activeBatch.parentBatchId);
-          if (parent?.sentResults?.length) {
-            parentThreadIds = {};
-            parentMimeMessageIds = {};
-            for (const r of parent.sentResults) {
-              parentThreadIds[r.email] = r.threadId;
-              parentMimeMessageIds[r.email] = r.mimeMessageId;
-            }
-          }
-        }
         const res = await fetch("/api/send/now", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -105,7 +134,9 @@ export function useEmailSend({
           console.error("Draft errors:", data.errors);
         } else {
           toast.success(`Created ${data.results.length} draft(s) in Gmail!`);
-          onBatchUpdate({ status: "sent", sentAt: new Date().toISOString(), sentResults: data.results });
+          // Status "drafted" — sentResults are not stored because draft IDs cannot be
+          // used for reply threading (no delivered Message-ID or threadId yet).
+          onBatchUpdate({ status: "drafted" });
         }
       }
     } catch (err: unknown) {

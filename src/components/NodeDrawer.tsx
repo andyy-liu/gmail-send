@@ -30,7 +30,7 @@ export function NodeDrawer({
   onUpdate,
   onClose,
 }: NodeDrawerProps) {
-  const [sendMode, setSendMode] = useState<"draft" | "send">("send");
+  const [sendMode, setSendMode] = useState<"draft" | "send">("draft");
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const isFollowUp = !!batch?.parentBatchId;

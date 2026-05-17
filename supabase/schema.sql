@@ -152,6 +152,8 @@ create table public.send_recipients (
   gmail_message_id text,
   gmail_thread_id text,
   gmail_mime_message_id text,
+  parent_thread_id text,
+  parent_mime_message_id text,
   idempotency_key text not null unique,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),

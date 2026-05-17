@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { sendMessage, sendReply } from "@/lib/gmail";
 import type { Contact } from "@/lib/gmail";
+import { validateContacts, hasCRLF } from "@/lib/validate";
 
 export async function POST(request: Request) {
   try {
@@ -31,6 +32,23 @@ export async function POST(request: Request) {
 
     if (!subject || !emailBody || !contacts || !Array.isArray(contacts)) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+    }
+    if (hasCRLF(subject)) {
+      return NextResponse.json({ error: "Invalid characters in subject" }, { status: 400 });
+    }
+    const contactError = validateContacts(contacts);
+    if (contactError) {
+      return NextResponse.json({ error: contactError }, { status: 400 });
+    }
+    if (parentThreadIds) {
+      for (const v of Object.values(parentThreadIds)) {
+        if (hasCRLF(v)) return NextResponse.json({ error: "Invalid thread ID" }, { status: 400 });
+      }
+    }
+    if (parentMimeMessageIds) {
+      for (const v of Object.values(parentMimeMessageIds)) {
+        if (hasCRLF(v)) return NextResponse.json({ error: "Invalid message ID" }, { status: 400 });
+      }
     }
 
     const results: { email: string; messageId: string; threadId: string; mimeMessageId: string }[] = [];

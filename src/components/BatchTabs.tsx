@@ -15,6 +15,7 @@ interface BatchTabsProps {
 
 const STATUS_DOT: Record<Batch["status"], string> = {
   active: "bg-neutral-400",
+  drafted: "bg-blue-400",
   sent: "bg-green-500",
   scheduled: "bg-amber-500",
 };

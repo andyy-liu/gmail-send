@@ -6,6 +6,11 @@ export interface Contact {
   company: string;
 }
 
+/** Strip CR and LF to prevent MIME header injection */
+function sanitizeHeader(value: string): string {
+  return value.replace(/[\r\n]/g, "");
+}
+
 /** Escape HTML entities in user-supplied values before injecting into HTML body */
 function escapeHtml(str: string): string {
   return str
@@ -59,15 +64,17 @@ function createMimeMessage(
     `</body></html>`,
   ].join("\n");
 
-  const fromAddr = fromEmail ?? "me";
+  const safeFrom = sanitizeHeader(fromEmail ?? "me");
+  const safeTo = sanitizeHeader(to);
+  const safeSubject = sanitizeHeader(subject);
   const fromHeader = fromName
-    ? `From: =?UTF-8?B?${Buffer.from(fromName).toString("base64")}?= <${fromAddr}>`
-    : `From: ${fromAddr}`;
+    ? `From: =?UTF-8?B?${Buffer.from(sanitizeHeader(fromName)).toString("base64")}?= <${safeFrom}>`
+    : `From: ${safeFrom}`;
 
   const message = [
     fromHeader,
-    `To: ${to}`,
-    `Subject: =?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`,
+    `To: ${safeTo}`,
+    `Subject: =?UTF-8?B?${Buffer.from(safeSubject).toString("base64")}?=`,
     `Message-ID: ${mimeMessageId}`,
     ...extraHeaders,
     `MIME-Version: 1.0`,
@@ -145,9 +152,10 @@ export async function sendReply(
   const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
   const mimeMessageId = `<${crypto.randomUUID()}@mail.gmail.com>`;
 
+  const safeInReplyTo = sanitizeHeader(inReplyToMimeMessageId);
   const raw = createMimeMessage(contact.email, subject, body, mimeMessageId, [
-    `In-Reply-To: ${inReplyToMimeMessageId}`,
-    `References: ${inReplyToMimeMessageId}`,
+    `In-Reply-To: ${safeInReplyTo}`,
+    `References: ${safeInReplyTo}`,
   ], fromName, fromEmail);
 
   const res = await gmail.users.messages.send({

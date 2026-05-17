@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Calendar, Clock, Users, X, RefreshCw, Mail, Trash2 } from "lucide-react";
+import { Calendar, Clock, Users, X, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Contact } from "@/lib/gmail";
 
 interface JobSummary {
   id: string;
   scheduledAt: string;
   subject: string;
-  contacts: Contact[];
+  status: string;
+  recipientCount: number;
 }
 
 function timeUntil(iso: string): string {
@@ -39,13 +39,8 @@ interface JobCardProps {
 }
 
 function JobCard({ job, onCancel, cancelling }: JobCardProps) {
-  const MAX_VISIBLE = 4;
-  const visible = job.contacts.slice(0, MAX_VISIBLE);
-  const overflow = job.contacts.length - MAX_VISIBLE;
-
   return (
     <div className="group relative flex flex-col gap-3 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 shadow-sm hover:shadow-md transition-shadow">
-      {/* Cancel button */}
       <button
         onClick={() => onCancel(job.id)}
         disabled={cancelling}
@@ -55,14 +50,12 @@ function JobCard({ job, onCancel, cancelling }: JobCardProps) {
         <X className="h-4 w-4" />
       </button>
 
-      {/* Subject */}
       <div className="pr-6">
         <p className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 truncate leading-snug">
           {job.subject || <span className="italic text-neutral-400">(no subject)</span>}
         </p>
       </div>
 
-      {/* Time */}
       <div className="flex items-center gap-3 text-xs text-neutral-500">
         <span className="flex items-center gap-1">
           <Calendar className="h-3.5 w-3.5 shrink-0" />
@@ -74,30 +67,10 @@ function JobCard({ job, onCancel, cancelling }: JobCardProps) {
         </span>
       </div>
 
-      {/* Recipients */}
-      <div className="space-y-1.5">
-        <p className="flex items-center gap-1 text-xs font-medium text-neutral-400">
-          <Users className="h-3.5 w-3.5" />
-          {job.contacts.length} recipient{job.contacts.length !== 1 ? "s" : ""}
-        </p>
-        <div className="flex flex-wrap gap-1">
-          {visible.map((c) => (
-            <span
-              key={c.email}
-              title={c.email}
-              className="flex items-center gap-1 text-xs bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 rounded-md px-2 py-0.5 max-w-[160px] truncate"
-            >
-              <Mail className="h-3 w-3 shrink-0" />
-              {c.firstName ? `${c.firstName} (${c.email})` : c.email}
-            </span>
-          ))}
-          {overflow > 0 && (
-            <span className="text-xs text-neutral-400 px-1 py-0.5">
-              +{overflow} more
-            </span>
-          )}
-        </div>
-      </div>
+      <p className="flex items-center gap-1 text-xs font-medium text-neutral-400">
+        <Users className="h-3.5 w-3.5" />
+        {job.recipientCount} recipient{job.recipientCount !== 1 ? "s" : ""}
+      </p>
     </div>
   );
 }
