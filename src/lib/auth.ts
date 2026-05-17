@@ -1,5 +1,6 @@
 import { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import { resolveDbUser } from "./supabase/resolve-user";
 
 async function refreshAccessToken(refreshToken: string) {
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -51,6 +52,20 @@ export const authOptions: NextAuthOptions = {
         // Google may only return refresh_token on first consent.
         token.refreshToken = account.refresh_token ?? token.refreshToken;
         token.expiresAt = account.expires_at; // seconds since epoch
+
+        // Persist user + encrypted refresh token to Supabase on fresh sign-in.
+        try {
+          await resolveDbUser({
+            email: token.email!,
+            name: token.name,
+            image: token.picture,
+            googleSub: account.providerAccountId,
+            refreshToken: account.refresh_token ?? null,
+            scopes: account.scope ?? null,
+          });
+        } catch (err) {
+          console.error("Failed to persist user to Supabase:", err);
+        }
       }
       // Token still valid (with 60s buffer)
       if (Date.now() < (token.expiresAt as number) * 1000 - 60_000) {
