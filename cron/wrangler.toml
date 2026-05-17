@@ -4,7 +4,7 @@ compatibility_date = "2024-01-01"
 
 # Runs every minute. Change to "*/5 * * * *" for every 5 minutes.
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
 
 # Public, non-secret config. Replace with your deployed Next.js URL (no trailing slash).
 [vars]

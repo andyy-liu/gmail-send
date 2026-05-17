@@ -1,5 +1,5 @@
-export default {
-  async scheduled(event, env, ctx) {
+const worker = {
+  async scheduled(event, env) {
     const url = `${env.APP_URL}/api/jobs/process`;
     try {
       const res = await fetch(url, {
@@ -17,3 +17,5 @@ export default {
     }
   },
 };
+
+export default worker;
