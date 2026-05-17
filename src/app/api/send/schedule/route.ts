@@ -52,6 +52,7 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const {
+      batchId,
       subject,
       body: emailBody,
       signature,
@@ -60,6 +61,7 @@ export async function POST(request: Request) {
       parentThreadIds,
       parentMimeMessageIds,
     } = body as {
+      batchId: string;
       subject: string;
       body: string;
       signature?: string;
@@ -69,7 +71,7 @@ export async function POST(request: Request) {
       parentMimeMessageIds?: Record<string, string>;
     };
 
-    if (!subject || !emailBody || !contacts || !Array.isArray(contacts) || !scheduledAt) {
+    if (!batchId || !subject || !emailBody || !contacts || !Array.isArray(contacts) || !scheduledAt) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
     }
     if (hasCRLF(subject)) {
@@ -121,6 +123,7 @@ export async function POST(request: Request) {
     const jobId = await scheduleJob({
       userId,
       googleAccountId,
+      batchId,
       subject,
       body: emailBody,
       signature: signature || "",
@@ -132,6 +135,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ jobId, scheduledAt: scheduledDate.toISOString(), count: contacts.length });
   } catch (err: unknown) {
     console.error("Error scheduling send:", err);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    const message = err instanceof Error ? err.message : "Internal Server Error";
+    const status =
+      message === "Batch not found" || message === "Previous email not found"
+        ? 404
+        : message.includes("Schedule") ||
+          message.includes("scheduled") ||
+          message.includes("Follow-up") ||
+          message.includes("before")
+        ? 400
+        : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

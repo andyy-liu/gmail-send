@@ -56,8 +56,14 @@ function EmailNodeComponent({ data }: NodeProps) {
 
   const timingLabel = useMemo(() => {
     if (batch.parentBatchId) {
-      const d = batch.scheduledDelay;
-      return d ? `Send in ${d.value} ${d.unit}` : "Follow-up";
+      if (batch.scheduledAt) {
+        try {
+          return `Follow-up · ${new Date(batch.scheduledAt).toLocaleDateString()}`;
+        } catch {
+          return "Follow-up scheduled";
+        }
+      }
+      return "Follow-up draft";
     }
     if (batch.scheduledAt) {
       try {
@@ -67,7 +73,7 @@ function EmailNodeComponent({ data }: NodeProps) {
       }
     }
     return "Send immediately";
-  }, [batch.parentBatchId, batch.scheduledDelay, batch.scheduledAt]);
+  }, [batch.parentBatchId, batch.scheduledAt]);
 
   const statusLabel =
     batch.status === "sent" ? "Sent" : batch.status === "scheduled" ? "Scheduled" : "Draft";
@@ -168,13 +174,7 @@ function EmailNodeComponent({ data }: NodeProps) {
 }
 
 // ─── Ghost / add node ────────────────────────────────────────────────────────
-type GhostNodeData = {
-  parentId: string;
-  onAdd: (parentId: string) => void;
-};
-
-function GhostNodeComponent({ data }: NodeProps) {
-  const { parentId, onAdd } = data as GhostNodeData;
+function GhostNodeComponent() {
   return (
     <div
       className="flex items-center justify-center rounded border-2 border-dashed border-neutral-300 bg-transparent cursor-pointer hover:border-neutral-400 hover:bg-neutral-50 transition-colors duration-150"

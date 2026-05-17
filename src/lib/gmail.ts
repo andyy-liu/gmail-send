@@ -46,6 +46,29 @@ function getGmailClient(accessToken: string) {
   return google.gmail({ version: "v1", auth });
 }
 
+async function getDeliveredMessageId(
+  gmail: ReturnType<typeof getGmailClient>,
+  gmailMessageId: string | null | undefined,
+  fallbackMimeMessageId: string,
+  logContext: string
+): Promise<string> {
+  if (!gmailMessageId) return fallbackMimeMessageId;
+  try {
+    const meta = await gmail.users.messages.get({
+      userId: "me",
+      id: gmailMessageId,
+      format: "metadata",
+      metadataHeaders: ["Message-ID"],
+    });
+    const headers = meta.data.payload?.headers ?? [];
+    const header = headers.find((h) => h.name?.toLowerCase() === "message-id");
+    return header?.value || fallbackMimeMessageId;
+  } catch (err) {
+    console.error(`[${logContext}] failed to fetch Message-ID from Gmail:`, err);
+    return fallbackMimeMessageId;
+  }
+}
+
 function createMimeMessage(
   to: string,
   subject: string,
@@ -116,21 +139,7 @@ export async function sendMessage(
 
   // Gmail may replace our Message-ID header on delivery. Fetch the real one
   // so In-Reply-To on follow-ups matches what recipients actually received.
-  let finalMimeMessageId = mimeMessageId;
-  if (res.data.id) {
-    try {
-      const meta = await gmail.users.messages.get({
-        userId: "me",
-        id: res.data.id,
-        format: "metadata",
-      });
-      const headers = meta.data.payload?.headers ?? [];
-      const header = headers.find((h) => h.name?.toLowerCase() === "message-id");
-      if (header?.value) finalMimeMessageId = header.value;
-    } catch (err) {
-      console.error("[sendMessage] failed to fetch Message-ID from Gmail:", err);
-    }
-  }
+  const finalMimeMessageId = await getDeliveredMessageId(gmail, res.data.id, mimeMessageId, "sendMessage");
 
   return { id: res.data.id, threadId: res.data.threadId, mimeMessageId: finalMimeMessageId };
 }
@@ -163,7 +172,9 @@ export async function sendReply(
     requestBody: { raw, threadId },
   });
 
-  return { id: res.data.id, threadId: res.data.threadId, mimeMessageId };
+  const finalMimeMessageId = await getDeliveredMessageId(gmail, res.data.id, mimeMessageId, "sendReply");
+
+  return { id: res.data.id, threadId: res.data.threadId, mimeMessageId: finalMimeMessageId };
 }
 
 /**

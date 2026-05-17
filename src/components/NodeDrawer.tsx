@@ -6,12 +6,26 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, SendIcon, FileText, CheckCircle2, Clock } from "lucide-react";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Loader2,
+  SendIcon,
+  FileText,
+  CheckCircle2,
+  Clock,
+  CalendarIcon,
+} from "lucide-react";
 import { Batch, RecipientResult, RecipientResultStatus } from "@/lib/batches";
 import { useEmailSend } from "@/hooks/useEmailSend";
 import { ContactTable } from "@/components/ContactTable";
 import { TemplateEditor } from "@/components/TemplateEditor";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { cn } from "@/lib/utils";
 
 const DEFAULT_WIDTH = 520;
 const MIN_WIDTH = 340;
@@ -58,6 +72,117 @@ function recipientRowToResult(r: RecipientRow): RecipientResult | null {
   };
 }
 
+function isWeekendDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+
+function pad2(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function parseLocalDateTime(value: string) {
+  const [datePart, timePart = "09:00"] = value.split("T");
+  const [year, month, day] = datePart.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  const [hour = 9, minute = 0] = timePart.split(":").map(Number);
+  return new Date(year, month - 1, day, hour, minute);
+}
+
+function toLocalDateTimeValue(date: Date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+function mergeDateAndTime(date: Date, time: string) {
+  const [hour = 9, minute = 0] = time.split(":").map(Number);
+  return toLocalDateTimeValue(
+    new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, minute),
+  );
+}
+
+function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date: Date, days: number) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+function laterDate(a: Date, b: Date) {
+  return a.getTime() > b.getTime() ? a : b;
+}
+
+function DateTimePicker({
+  value,
+  onChange,
+  minDate,
+}: {
+  value: string;
+  onChange: (value: string | undefined) => void;
+  minDate: Date;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = value ? parseLocalDateTime(value) : null;
+  const timeValue = selected
+    ? `${pad2(selected.getHours())}:${pad2(selected.getMinutes())}`
+    : "09:00";
+  const minDay = startOfLocalDay(minDate);
+
+  return (
+    <div className="flex items-center gap-2">
+      <Popover
+        open={open}
+        onOpenChange={setOpen}
+      >
+        <PopoverTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              className={cn(
+                "h-8 w-[190px] justify-start gap-2 rounded text-left text-xs font-normal",
+                !selected && "text-neutral-400",
+              )}
+            >
+              <CalendarIcon className="h-3.5 w-3.5 text-neutral-500" />
+              {selected ? selected.toLocaleDateString() : "Select date"}
+            </Button>
+          }
+        />
+        <PopoverContent
+          align="start"
+          className="w-auto p-0"
+        >
+          <Calendar
+            mode="single"
+            selected={selected ?? undefined}
+            disabled={{ before: minDay }}
+            onSelect={(date) => {
+              if (!date) {
+                onChange(undefined);
+                return;
+              }
+              onChange(mergeDateAndTime(date, timeValue));
+              setOpen(false);
+            }}
+          />
+        </PopoverContent>
+      </Popover>
+      <Input
+        type="time"
+        value={timeValue}
+        onChange={(e) => {
+          const base = selected ?? new Date();
+          onChange(mergeDateAndTime(base, e.target.value));
+        }}
+        className="h-8 w-[96px] px-2 text-xs tabular-nums [appearance:textfield] [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
+      />
+    </div>
+  );
+}
+
 export function NodeDrawer({
   open,
   batch,
@@ -72,27 +197,35 @@ export function NodeDrawer({
   const [isDragging, setIsDragging] = useState(false);
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
 
-  const onDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragState.current = { startX: e.clientX, startWidth: width };
-    setIsDragging(true);
+  const onDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragState.current = { startX: e.clientX, startWidth: width };
+      setIsDragging(true);
 
-    function onMouseMove(ev: MouseEvent) {
-      if (!dragState.current) return;
-      const delta = dragState.current.startX - ev.clientX;
-      setWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, dragState.current.startWidth + delta)));
-    }
+      function onMouseMove(ev: MouseEvent) {
+        if (!dragState.current) return;
+        const delta = dragState.current.startX - ev.clientX;
+        setWidth(
+          Math.max(
+            MIN_WIDTH,
+            Math.min(MAX_WIDTH, dragState.current.startWidth + delta),
+          ),
+        );
+      }
 
-    function onMouseUp() {
-      dragState.current = null;
-      setIsDragging(false);
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-    }
+      function onMouseUp() {
+        dragState.current = null;
+        setIsDragging(false);
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+      }
 
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  }, [width]);
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [width],
+  );
 
   // ─── Derived state ────────────────────────────────────────────────────────
   const isFollowUp = !!batch?.parentBatchId;
@@ -101,16 +234,30 @@ export function NodeDrawer({
     : undefined;
   const isSent = batch?.status === "sent";
   const isScheduled = batch?.status === "scheduled";
-  const locked = isSent;
+  // While scheduled, the batch row IS the snapshot the worker reads. Lock
+  // subject/body/contacts so edits don't leak into the running send.
+  const locked = isSent || isScheduled;
   const scheduledAt = batch?.scheduledAt ?? "";
+  const scheduledAtFallsOnWeekend = scheduledAt
+    ? isWeekendDate(scheduledAt)
+    : false;
+  const today = startOfLocalDay(new Date());
+  const parentTime = parent?.sentAt ?? parent?.scheduledAt;
+  const parentMinDate = parentTime
+    ? addDays(startOfLocalDay(new Date(parentTime)), 1)
+    : today;
+  const minScheduleDate = isFollowUp ? laterDate(today, parentMinDate) : today;
 
   // Recipients shown for this node. Follow-ups inherit from parent's current
   // contacts so the recipient list always lives on the root node and stays
   // in sync. Otherwise we use the node's own contacts.
-  const displayedContacts = isFollowUp ? (parent?.contacts ?? []) : (batch?.contacts ?? []);
+  const displayedContacts = isFollowUp
+    ? (parent?.contacts ?? [])
+    : (batch?.contacts ?? []);
 
-  const isSendAction = !scheduledAt && (sendMode === "send" || isFollowUp);
-  const needsConfirmation = !!batch && !isSent && (isSendAction || !!scheduledAt);
+  const isSendAction = !scheduledAt && sendMode === "send";
+  const needsConfirmation =
+    !!batch && !isSent && (isSendAction || !!scheduledAt);
   const recipientCount = displayedContacts.filter((c) => c.email.trim()).length;
   const sampleRecipients = displayedContacts
     .filter((c) => c.email.trim())
@@ -176,19 +323,21 @@ export function NodeDrawer({
   // ─── Action / button labels ──────────────────────────────────────────────
   const actionLabel = isScheduled
     ? "Reschedule"
-    : scheduledAt
-    ? "Schedule Send"
-    : sendMode === "send"
-    ? "Send Now"
-    : "Save Draft";
+    : isFollowUp && !scheduledAt
+      ? "Choose a Send Time"
+      : scheduledAt
+        ? "Schedule Send"
+        : sendMode === "send"
+          ? "Send Now"
+          : "Save Draft";
 
   const pendingLabel = isScheduled
     ? "Rescheduling..."
     : scheduledAt
-    ? "Scheduling..."
-    : sendMode === "send"
-    ? "Sending..."
-    : "Saving Draft...";
+      ? "Scheduling..."
+      : sendMode === "send"
+        ? "Sending..."
+        : "Saving Draft...";
 
   function handleActionClick() {
     if (needsConfirmation) {
@@ -199,12 +348,19 @@ export function NodeDrawer({
   }
 
   return (
-    <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
+    <Sheet
+      open={open}
+      onOpenChange={(o) => !o && onClose()}
+    >
       <SheetContent
         side="right"
         showCloseButton={false}
         className="flex flex-col p-0 gap-0"
-        style={{ width, maxWidth: "none", ...(isDragging && { transition: "none" }) }}
+        style={{
+          width,
+          maxWidth: "none",
+          ...(isDragging && { transition: "none" }),
+        }}
       >
         {/* Resize handle */}
         <div
@@ -232,34 +388,56 @@ export function NodeDrawer({
               {isSent && batch?.sentAt
                 ? `Sent ${new Date(batch.sentAt).toLocaleString()}`
                 : isFollowUp
-                ? "Inherits thread from parent"
-                : "Initial email in sequence"}
+                  ? "Inherits thread from parent"
+                  : "Initial email in sequence"}
             </p>
           </div>
           <button
             onClick={onClose}
             className="p-1.5 rounded hover:bg-neutral-100 transition-colors text-neutral-400 hover:text-neutral-700"
           >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 14 14"
+              fill="none"
+            >
+              <path
+                d="M1 1l12 12M13 1L1 13"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
             </svg>
           </button>
         </div>
 
-        <Tabs defaultValue="email" className="flex-1 flex flex-col overflow-hidden">
+        <Tabs
+          defaultValue="email"
+          className="flex-1 flex flex-col overflow-hidden"
+        >
           <div className="px-6 pt-4 shrink-0">
             <TabsList className="bg-neutral-100 rounded p-0.5 h-auto gap-0">
-              <TabsTrigger value="email" className="text-xs px-3 py-1.5 h-auto rounded">
+              <TabsTrigger
+                value="email"
+                className="text-xs px-3 py-1.5 h-auto rounded"
+              >
                 Email
               </TabsTrigger>
-              <TabsTrigger value="recipients" className="text-xs px-3 py-1.5 h-auto rounded">
+              <TabsTrigger
+                value="recipients"
+                className="text-xs px-3 py-1.5 h-auto rounded"
+              >
                 Recipients
               </TabsTrigger>
             </TabsList>
           </div>
 
           {/* Email tab */}
-          <TabsContent value="email" className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          <TabsContent
+            value="email"
+            className="flex-1 overflow-y-auto px-6 py-4 space-y-4"
+          >
             {batch && (
               <>
                 {/* Timing config — hidden once sent. For scheduled non-follow-ups
@@ -268,49 +446,36 @@ export function NodeDrawer({
                 {!isSent && (
                   <div className="pb-4 border-b border-neutral-100 space-y-2">
                     <Label className="text-xs font-medium text-neutral-600">
-                      {isFollowUp ? "Send delay" : isScheduled ? "Scheduled for" : "Send timing"}
+                      {isFollowUp
+                        ? "Schedule follow-up for"
+                        : isScheduled
+                          ? "Scheduled for"
+                          : "Send timing"}
                     </Label>
 
                     {isFollowUp ? (
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          min={1}
-                          value={batch.scheduledDelay?.value ?? 3}
-                          onChange={(e) =>
-                            onUpdate({
-                              scheduledDelay: {
-                                value: Math.max(1, parseInt(e.target.value) || 1),
-                                unit: batch.scheduledDelay?.unit ?? "days",
-                              },
-                            })
-                          }
-                          className="w-20 text-sm h-8"
+                      <div className="space-y-1.5">
+                        <DateTimePicker
+                          value={scheduledAt}
+                          onChange={(value) => onUpdate({ scheduledAt: value })}
+                          minDate={minScheduleDate}
                         />
-                        <select
-                          value={batch.scheduledDelay?.unit ?? "days"}
-                          onChange={(e) =>
-                            onUpdate({
-                              scheduledDelay: {
-                                value: batch.scheduledDelay?.value ?? 3,
-                                unit: e.target.value as "days" | "hours",
-                              },
-                            })
-                          }
-                          className="h-8 px-2 text-xs border border-neutral-200 rounded bg-white text-neutral-700 focus:outline-none"
-                        >
-                          <option value="days">days</option>
-                          <option value="hours">hours</option>
-                        </select>
-                        <span className="text-xs text-neutral-400">after previous step</span>
+                        <p className="text-[11px] text-neutral-400">
+                          The previous email must be scheduled first. This
+                          follow-up stays draft until you click Schedule Send.
+                        </p>
+                        {scheduledAtFallsOnWeekend && (
+                          <p className="text-[11px] font-medium text-amber-600">
+                            This send time falls on a weekend.
+                          </p>
+                        )}
                       </div>
                     ) : isScheduled ? (
                       <>
-                        <Input
-                          type="datetime-local"
+                        <DateTimePicker
                           value={scheduledAt}
-                          onChange={(e) => onUpdate({ scheduledAt: e.target.value })}
-                          className="text-xs h-8 w-fit"
+                          onChange={(value) => onUpdate({ scheduledAt: value })}
+                          minDate={minScheduleDate}
                         />
                         <p className="text-[11px] text-neutral-400">
                           Edits apply when you reschedule.
@@ -334,7 +499,9 @@ export function NodeDrawer({
                               onUpdate({
                                 scheduledAt:
                                   scheduledAt ||
-                                  new Date(Date.now() + 3600000).toISOString().slice(0, 16),
+                                  new Date(Date.now() + 3600000)
+                                    .toISOString()
+                                    .slice(0, 16),
                               })
                             }
                             className={`px-3 py-1.5 text-xs rounded font-medium transition-colors ${
@@ -347,11 +514,12 @@ export function NodeDrawer({
                           </button>
                         </div>
                         {scheduledAt && (
-                          <Input
-                            type="datetime-local"
+                          <DateTimePicker
                             value={scheduledAt}
-                            onChange={(e) => onUpdate({ scheduledAt: e.target.value })}
-                            className="text-xs h-8 w-fit"
+                            onChange={(value) =>
+                              onUpdate({ scheduledAt: value })
+                            }
+                            minDate={minScheduleDate}
                           />
                         )}
                       </>
@@ -373,7 +541,10 @@ export function NodeDrawer({
           </TabsContent>
 
           {/* Recipients tab */}
-          <TabsContent value="recipients" className="flex-1 overflow-y-auto px-6 py-4">
+          <TabsContent
+            value="recipients"
+            className="flex-1 overflow-y-auto px-6 py-4"
+          >
             {batch && (
               <>
                 {!isFollowUp && !locked && (
@@ -442,7 +613,7 @@ export function NodeDrawer({
 
             <Button
               onClick={handleActionClick}
-              disabled={isSubmitting || !batch}
+              disabled={isSubmitting || !batch || (isFollowUp && !scheduledAt)}
               className="bg-neutral-900 text-white hover:bg-neutral-700 active:scale-[0.97] transition-transform w-full"
             >
               {isSubmitting ? (
@@ -468,11 +639,15 @@ export function NodeDrawer({
               isScheduled
                 ? "Reschedule this send?"
                 : scheduledAt
-                ? "Schedule this send?"
-                : "Send these emails now?"
+                  ? "Schedule this send?"
+                  : "Send these emails now?"
             }
             confirmLabel={
-              isScheduled ? "Reschedule" : scheduledAt ? "Schedule Send" : "Send Now"
+              isScheduled
+                ? "Reschedule"
+                : scheduledAt
+                  ? "Schedule Send"
+                  : "Send Now"
             }
             confirmVariant={scheduledAt ? "default" : "destructive"}
             description={
@@ -481,19 +656,31 @@ export function NodeDrawer({
                   {isScheduled
                     ? `This cancels the existing scheduled job and re-schedules ${recipientCount} email${recipientCount === 1 ? "" : "s"} for ${new Date(scheduledAt).toLocaleString()}.`
                     : scheduledAt
-                    ? `This will schedule ${recipientCount} email${recipientCount === 1 ? "" : "s"} for ${new Date(scheduledAt).toLocaleString()}.`
-                    : `This will immediately send ${recipientCount} email${recipientCount === 1 ? "" : "s"} through Gmail.`}
+                      ? `This will schedule ${recipientCount} email${recipientCount === 1 ? "" : "s"} for ${new Date(scheduledAt).toLocaleString()}.`
+                      : `This will immediately send ${recipientCount} email${recipientCount === 1 ? "" : "s"} through Gmail.`}
                 </p>
+                {scheduledAtFallsOnWeekend && (
+                  <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
+                    This send time falls on a weekend.
+                  </p>
+                )}
                 <div className="space-y-1.5 rounded border border-neutral-200 bg-neutral-50 p-3">
                   <div>
-                    <span className="text-xs font-medium uppercase tracking-wide text-neutral-400">Subject</span>
+                    <span className="text-xs font-medium uppercase tracking-wide text-neutral-400">
+                      Subject
+                    </span>
                     <p className="mt-0.5 text-neutral-800">{batch.subject}</p>
                   </div>
                   <div>
-                    <span className="text-xs font-medium uppercase tracking-wide text-neutral-400">Recipients</span>
+                    <span className="text-xs font-medium uppercase tracking-wide text-neutral-400">
+                      Recipients
+                    </span>
                     <div className="mt-1 space-y-1">
                       {sampleRecipients.map((contact) => (
-                        <p key={contact.id} className="truncate text-neutral-700">
+                        <p
+                          key={contact.id}
+                          className="truncate text-neutral-700"
+                        >
                           {contact.firstName} · {contact.email}
                         </p>
                       ))}

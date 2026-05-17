@@ -13,6 +13,21 @@ interface UseEmailSendOptions {
   onScheduled?: () => void;
 }
 
+function getBatchTime(batch: Batch | undefined): string | undefined {
+  return batch?.sentAt ?? batch?.scheduledAt;
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString();
+}
+
+function isWeekendDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+
 export function useEmailSend({
   activeBatch,
   batches,
@@ -55,13 +70,6 @@ export function useEmailSend({
       let parentThreadIds: Record<string, string> | undefined;
       let parentMimeMessageIds: Record<string, string> | undefined;
       if (activeBatch.parentBatchId) {
-        // A follow-up with a delay must wait for the parent to be sent.
-        // Without parent.sentAt we cannot compute the scheduled time and we
-        // would silently send immediately — block instead.
-        if (activeBatch.scheduledDelay && !parent?.sentAt) {
-          throw new Error("Cannot send follow-up before the parent email has been sent.");
-        }
-
         if (parent?.status === "sent" && parent?.recipientResults?.length) {
           parentThreadIds = {};
           parentMimeMessageIds = {};
@@ -74,23 +82,38 @@ export function useEmailSend({
         }
       }
 
-      // For follow-ups with a scheduled delay, compute the effective send time from the parent's sentAt.
-      let effectiveScheduledAt = scheduledAt;
-      if (!effectiveScheduledAt && activeBatch.parentBatchId && activeBatch.scheduledDelay) {
-        const parent = batches.find((b) => b.id === activeBatch.parentBatchId);
-        if (parent?.sentAt) {
-          const delayMs =
-            activeBatch.scheduledDelay.unit === "days"
-              ? activeBatch.scheduledDelay.value * 24 * 60 * 60 * 1000
-              : activeBatch.scheduledDelay.value * 60 * 60 * 1000;
-          const computedAt = new Date(new Date(parent.sentAt).getTime() + delayMs);
-          if (computedAt > new Date()) {
-            effectiveScheduledAt = computedAt.toISOString();
-          }
-        }
-      }
+      const effectiveScheduledAt = scheduledAt;
 
       if (effectiveScheduledAt) {
+        const scheduledDate = new Date(effectiveScheduledAt);
+        if (Number.isNaN(scheduledDate.getTime()) || scheduledDate <= new Date()) {
+          throw new Error("Schedule time must be in the future.");
+        }
+
+        if (activeBatch.parentBatchId) {
+          if (!parent) throw new Error("Previous email not found.");
+          if (parent.status !== "scheduled" && parent.status !== "sent") {
+            throw new Error("Schedule the previous email before scheduling this follow-up.");
+          }
+          const parentTime = getBatchTime(parent);
+          if (!parentTime) {
+            throw new Error("Previous email needs a scheduled or sent time first.");
+          }
+          if (scheduledDate <= new Date(parentTime)) {
+            throw new Error(`Follow-up must be after the previous email (${formatDateTime(parentTime)}).`);
+          }
+        }
+
+        const nextFollowUp = batches.find((b) => b.parentBatchId === activeBatch.id);
+        const nextTime = getBatchTime(nextFollowUp);
+        if (nextTime && scheduledDate >= new Date(nextTime)) {
+          throw new Error(`This email must be before its follow-up (${formatDateTime(nextTime)}).`);
+        }
+
+        if (isWeekendDate(effectiveScheduledAt)) {
+          toast.warning("This send time falls on a weekend.");
+        }
+
         // If this batch already has a scheduled job, cancel it first so we
         // don't end up with two jobs sending to the same recipients.
         if (activeBatch.scheduledJobId) {
@@ -105,6 +128,7 @@ export function useEmailSend({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            batchId: activeBatch.id,
             subject: activeBatch.subject,
             body: activeBatch.body,
             signature,
@@ -116,9 +140,9 @@ export function useEmailSend({
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Failed to schedule send.");
         toast.success(`Scheduled ${data.count} email(s) for ${new Date(data.scheduledAt).toLocaleString()}`);
-        onBatchUpdate({ status: "scheduled", scheduledJobId: data.jobId });
+        onBatchUpdate({ status: "scheduled", scheduledAt: data.scheduledAt, scheduledJobId: data.jobId });
         onScheduled?.();
-      } else if (sendMode === "send" || activeBatch.parentBatchId) {
+      } else if (sendMode === "send") {
         const res = await fetch("/api/send/now", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
