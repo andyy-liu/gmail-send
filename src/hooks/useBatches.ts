@@ -13,16 +13,38 @@ export function useBatches() {
       const migrated = migrateLegacyData();
       const initial = migrated ?? [createBatch("Campaign 1")];
       setBatches(initial);
-    } else {
-      if (batches.some((b) => b.contacts.some((c) => !c.id))) {
-        setBatches((prev) =>
-          prev.map((b) => ({
-            ...b,
-            contacts: b.contacts.map((c) => (c.id ? c : { ...c, id: crypto.randomUUID() })),
-          }))
-        );
-      }
+      return;
     }
+
+    const needsContactIds = batches.some((b) => b.contacts.some((c) => !c.id));
+    const needsResultMigration = batches.some((b) => b.sentResults && !b.recipientResults);
+    if (!needsContactIds && !needsResultMigration) return;
+
+    setBatches((prev) =>
+      prev.map((b) => {
+        let next = b;
+        if (next.contacts.some((c) => !c.id)) {
+          next = {
+            ...next,
+            contacts: next.contacts.map((c) => (c.id ? c : { ...c, id: crypto.randomUUID() })),
+          };
+        }
+        if (next.sentResults && !next.recipientResults) {
+          next = {
+            ...next,
+            recipientResults: next.sentResults.map((r) => ({
+              email: r.email,
+              status: "sent" as const,
+              messageId: r.messageId,
+              threadId: r.threadId,
+              mimeMessageId: r.mimeMessageId,
+            })),
+            sentResults: undefined,
+          };
+        }
+        return next;
+      })
+    );
   }, [batches, setBatches]);
 
   const campaigns = batches.filter((b) => !b.parentBatchId);

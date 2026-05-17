@@ -1,14 +1,19 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useMemo } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { ContactRow } from "@/lib/batches";
-import { Trash2, Plus, Upload, Eraser } from "lucide-react";
+import { ContactRow, RecipientResult } from "@/lib/batches";
+import { Trash2, Plus, Upload, Eraser, CheckCircle2, AlertCircle, MailMinus, Clock } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface ContactTableProps {
   contacts: ContactRow[];
   setContacts: (contacts: ContactRow[]) => void;
+  readOnly?: boolean;
+  /** When present, each row shows a per-recipient status badge. */
+  recipientResults?: RecipientResult[];
+  /** Shown above the table when readOnly (e.g. "Inherits from parent"). */
+  readOnlyNotice?: string;
 }
 
 function parseCSVLine(line: string): string[] {
@@ -60,10 +65,61 @@ function parseCSV(text: string): ContactRow[] {
   });
 }
 
-export function ContactTable({ contacts, setContacts }: ContactTableProps) {
+function StatusBadge({ result }: { result: RecipientResult | undefined }) {
+  if (!result) {
+    return (
+      <span title="Pending" className="inline-flex items-center text-neutral-300">
+        <Clock className="h-4 w-4" />
+      </span>
+    );
+  }
+  if (result.status === "sent") {
+    return (
+      <span title="Sent" className="inline-flex items-center text-green-600">
+        <CheckCircle2 className="h-4 w-4" />
+      </span>
+    );
+  }
+  if (result.status === "skipped_replied") {
+    return (
+      <span
+        title={result.error || "Skipped — recipient replied to the thread."}
+        className="inline-flex items-center text-amber-600"
+      >
+        <MailMinus className="h-4 w-4" />
+      </span>
+    );
+  }
+  return (
+    <span
+      title={result.error || "Failed"}
+      className="inline-flex items-center text-red-600"
+    >
+      <AlertCircle className="h-4 w-4" />
+    </span>
+  );
+}
+
+export function ContactTable({
+  contacts,
+  setContacts,
+  readOnly = false,
+  recipientResults,
+  readOnlyNotice,
+}: ContactTableProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   // null = closed, number >= 0 = row index to delete, -1 = clear all
   const [confirmTarget, setConfirmTarget] = useState<number | null>(null);
+
+  const resultByEmail = useMemo(() => {
+    const map = new Map<string, RecipientResult>();
+    for (const r of recipientResults ?? []) {
+      if (r.email) map.set(r.email.toLowerCase(), r);
+    }
+    return map;
+  }, [recipientResults]);
+
+  const showStatusColumn = !!recipientResults;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -92,27 +148,42 @@ export function ContactTable({ contacts, setContacts }: ContactTableProps) {
     setContacts([...contacts, { id: crypto.randomUUID(), email: "", firstName: "", company: "" }]);
   };
 
+  const inputClass = readOnly
+    ? "border-transparent bg-transparent text-neutral-600 dark:text-neutral-300 cursor-default pointer-events-none"
+    : "border-transparent hover:border-border focus-visible:ring-1 bg-transparent transition-all";
+
   return (
     <div className="space-y-4">
+      {readOnly && readOnlyNotice && (
+        <p className="text-xs text-neutral-400">{readOnlyNotice}</p>
+      )}
       <div className="rounded-xl border bg-white dark:bg-neutral-900 overflow-hidden shadow-sm">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[30%]">Target Email</TableHead>
-              <TableHead className="w-[30%]">First Name</TableHead>
-              <TableHead className="w-[30%]">Company</TableHead>
-              <TableHead className="w-[10%] text-right">Actions</TableHead>
+              {showStatusColumn && <TableHead className="w-[36px]" />}
+              <TableHead>Target Email</TableHead>
+              <TableHead>First Name</TableHead>
+              <TableHead>Company</TableHead>
+              {!readOnly && <TableHead className="w-[60px] text-right">Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
             {contacts.map((contact, i) => (
               <TableRow key={contact.id}>
+                {showStatusColumn && (
+                  <TableCell className="pr-0">
+                    <StatusBadge result={resultByEmail.get(contact.email.toLowerCase())} />
+                  </TableCell>
+                )}
                 <TableCell>
                   <Input
                     placeholder="email@example.com"
                     value={contact.email}
                     onChange={(e) => updateContact(i, "email", e.target.value)}
-                    className="border-transparent hover:border-border focus-visible:ring-1 bg-transparent transition-all"
+                    readOnly={readOnly}
+                    tabIndex={readOnly ? -1 : 0}
+                    className={inputClass}
                   />
                 </TableCell>
                 <TableCell>
@@ -120,7 +191,9 @@ export function ContactTable({ contacts, setContacts }: ContactTableProps) {
                     placeholder="First Name"
                     value={contact.firstName}
                     onChange={(e) => updateContact(i, "firstName", e.target.value)}
-                    className="border-transparent hover:border-border focus-visible:ring-1 bg-transparent transition-all"
+                    readOnly={readOnly}
+                    tabIndex={readOnly ? -1 : 0}
+                    className={inputClass}
                   />
                 </TableCell>
                 <TableCell>
@@ -128,14 +201,18 @@ export function ContactTable({ contacts, setContacts }: ContactTableProps) {
                     placeholder="Company"
                     value={contact.company}
                     onChange={(e) => updateContact(i, "company", e.target.value)}
-                    className="border-transparent hover:border-border focus-visible:ring-1 bg-transparent transition-all"
+                    readOnly={readOnly}
+                    tabIndex={readOnly ? -1 : 0}
+                    className={inputClass}
                   />
                 </TableCell>
-                <TableCell className="text-right">
-                  <Button variant="ghost" size="icon" onClick={() => setConfirmTarget(i)} className="text-neutral-400 hover:text-red-500">
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </TableCell>
+                {!readOnly && (
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="icon" onClick={() => setConfirmTarget(i)} className="text-neutral-400 hover:text-red-500">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>
@@ -146,23 +223,25 @@ export function ContactTable({ contacts, setContacts }: ContactTableProps) {
           </div>
         )}
       </div>
-      <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={addContact} className="gap-2">
-          <Plus className="h-4 w-4" />
-          Add Row
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="gap-2">
-          <Upload className="h-4 w-4" />
-          Import CSV
-        </Button>
-        {contacts.length > 0 && (
-          <Button variant="outline" size="sm" onClick={() => setConfirmTarget(-1)} className="gap-2 text-neutral-400 hover:text-red-500">
-            <Eraser className="h-4 w-4" />
-            Clear All
+      {!readOnly && (
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={addContact} className="gap-2">
+            <Plus className="h-4 w-4" />
+            Add Row
           </Button>
-        )}
-        <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
-      </div>
+          <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="gap-2">
+            <Upload className="h-4 w-4" />
+            Import CSV
+          </Button>
+          {contacts.length > 0 && (
+            <Button variant="outline" size="sm" onClick={() => setConfirmTarget(-1)} className="gap-2 text-neutral-400 hover:text-red-500">
+              <Eraser className="h-4 w-4" />
+              Clear All
+            </Button>
+          )}
+          <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
+        </div>
+      )}
       <ConfirmDialog
         open={confirmTarget !== null}
         onOpenChange={(open) => { if (!open) setConfirmTarget(null); }}

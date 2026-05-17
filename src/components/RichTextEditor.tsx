@@ -21,6 +21,7 @@ interface RichTextEditorProps {
   content: string;
   onChange: (html: string) => void;
   placeholder?: string;
+  readOnly?: boolean;
 }
 
 const FONT_SIZES = ["8", "10", "12", "14", "16", "18", "20", "24", "28", "32"];
@@ -29,7 +30,7 @@ const COLORS = [
   "#2563eb", "#16a34a", "#9333ea", "#db2777",
 ];
 
-export function RichTextEditor({ content, onChange, placeholder }: RichTextEditorProps) {
+export function RichTextEditor({ content, onChange, placeholder, readOnly = false }: RichTextEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -47,6 +48,7 @@ export function RichTextEditor({ content, onChange, placeholder }: RichTextEdito
       TextAlign.configure({ types: ["paragraph", "heading"] }),
     ],
     content,
+    editable: !readOnly,
     editorProps: {
       attributes: {
         class: "prose prose-sm max-w-none focus:outline-none min-h-[220px] px-4 py-3 text-sm leading-relaxed",
@@ -58,6 +60,13 @@ export function RichTextEditor({ content, onChange, placeholder }: RichTextEdito
     },
     immediatelyRender: false,
   });
+
+  // Keep editor.editable in sync if the prop flips after mount.
+  useEffect(() => {
+    if (!editor) return;
+    if (editor.isEditable === !readOnly) return;
+    editor.setEditable(!readOnly);
+  }, [editor, readOnly]);
 
   // Sync editor content when the active batch changes or on initial load.
   // emitUpdate: false / clearContent(false) prevents onChange from firing
@@ -92,6 +101,7 @@ export function RichTextEditor({ content, onChange, placeholder }: RichTextEdito
   return (
     <div className="rounded-xl border bg-white dark:bg-neutral-900 shadow-sm overflow-hidden focus-within:ring-1 focus-within:ring-ring transition-shadow">
       {/* Toolbar */}
+      {!readOnly && (
       <div className="flex items-center gap-0.5 p-2 border-b bg-neutral-50 dark:bg-neutral-800/60 overflow-x-auto">
         {/* Text Format */}
         <Toggle size="sm" pressed={editor.isActive("bold")} onPressedChange={() => editor.chain().focus().toggleBold().run()} aria-label="Bold">
@@ -184,6 +194,7 @@ export function RichTextEditor({ content, onChange, placeholder }: RichTextEdito
           <Link2Off className="h-3.5 w-3.5" />
         </Toggle>
       </div>
+      )}
 
       {/* Editor Content */}
       <div className="relative">

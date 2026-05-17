@@ -4,7 +4,22 @@ export interface ContactRow extends Contact {
   id: string;
 }
 
-export interface SentResult {
+export type RecipientResultStatus = "sent" | "failed" | "skipped_replied";
+
+export interface RecipientResult {
+  email: string;
+  status: RecipientResultStatus;
+  // Present for status === "sent"; also preserved on "skipped_replied" so
+  // downstream follow-ups can still resolve the parent thread/message-id.
+  messageId?: string;
+  threadId?: string;
+  mimeMessageId?: string;
+  // Present for "failed" and "skipped_replied".
+  error?: string;
+}
+
+// Legacy shape kept only for the one-shot localStorage migration in useBatches.
+export interface LegacySentResult {
   email: string;
   messageId: string;
   threadId: string;
@@ -18,13 +33,17 @@ export interface Batch {
   body: string;
   contacts: ContactRow[];
   parentBatchId?: string;
-  sentResults?: SentResult[];
+  recipientResults?: RecipientResult[];
+  /** Legacy field — migrated to recipientResults on load. */
+  sentResults?: LegacySentResult[];
   status: "active" | "drafted" | "sent" | "scheduled";
   createdAt: string;
   sentAt?: string;
   // Canvas fields
   scheduledAt?: string;
   scheduledDelay?: { value: number; unit: "days" | "hours" };
+  /** Set after a successful schedule; used to poll per-recipient progress. */
+  scheduledJobId?: string;
 }
 
 export function createBatch(name: string, overrides?: Partial<Batch>): Batch {

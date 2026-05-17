@@ -166,6 +166,39 @@ export async function sendReply(
   return { id: res.data.id, threadId: res.data.threadId, mimeMessageId };
 }
 
+/**
+ * Returns true if the recipient sent at least one message in the given thread.
+ * Used to skip follow-ups to recipients who have already replied. On API
+ * errors we return false so a transient failure does not silently drop sends.
+ */
+export async function hasRecipientReplied(
+  accessToken: string,
+  threadId: string,
+  recipientEmail: string
+): Promise<boolean> {
+  const gmail = getGmailClient(accessToken);
+  const target = recipientEmail.toLowerCase().trim();
+  try {
+    const thread = await gmail.users.threads.get({
+      userId: "me",
+      id: threadId,
+      format: "metadata",
+      metadataHeaders: ["From"],
+    });
+    for (const msg of thread.data.messages ?? []) {
+      const fromHeader =
+        msg.payload?.headers?.find((h) => h.name?.toLowerCase() === "from")?.value ?? "";
+      const match = fromHeader.match(/<([^>]+)>/);
+      const fromEmail = (match ? match[1] : fromHeader).trim().toLowerCase();
+      if (fromEmail && fromEmail === target) return true;
+    }
+    return false;
+  } catch (err) {
+    console.error("[hasRecipientReplied] error:", err);
+    return false;
+  }
+}
+
 export async function createDraft(
   accessToken: string,
   contact: Contact,

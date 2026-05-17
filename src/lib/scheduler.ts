@@ -1,7 +1,7 @@
 import { OAuth2Client } from "google-auth-library";
 import { createAdminClient } from "./supabase/server";
 import { decryptToken } from "./encrypt";
-import { sendMessage, sendReply } from "./gmail";
+import { sendMessage, sendReply, hasRecipientReplied } from "./gmail";
 import type { Contact } from "./gmail";
 
 export interface ScheduleJobParams {
@@ -298,6 +298,33 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
           firstName: recipient.first_name,
           company: recipient.company,
         };
+
+        // Reply-skip check for follow-ups. We copy parent_thread_id forward
+        // into gmail_thread_id so any further follow-ups in the chain can
+        // still detect the reply and skip too.
+        if (recipient.parent_thread_id && recipient.parent_mime_message_id) {
+          const replied = await hasRecipientReplied(
+            accessToken,
+            recipient.parent_thread_id,
+            recipient.email
+          );
+          if (replied) {
+            const { error: skipError } = await db
+              .from("send_recipients")
+              .update({
+                status: "skipped_replied",
+                last_error: "Recipient already replied to the thread.",
+                last_error_at: new Date().toISOString(),
+                gmail_thread_id: recipient.parent_thread_id,
+                gmail_mime_message_id: recipient.parent_mime_message_id,
+              })
+              .eq("id", recipient.id);
+            if (skipError) {
+              errors.push(`${contact.email}: skip update failed: ${skipError.message}`);
+            }
+            continue;
+          }
+        }
 
         try {
           const result =
