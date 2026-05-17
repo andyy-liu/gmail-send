@@ -2,7 +2,6 @@
 
 import { useSession, signIn } from "next-auth/react";
 import { useState } from "react";
-import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useBatches } from "@/hooks/useBatches";
 import { Sidebar } from "@/components/Sidebar";
 import { WorkflowCanvas } from "@/components/WorkflowCanvas";
@@ -14,7 +13,6 @@ import { Loader2 } from "lucide-react";
 
 export default function Home() {
   const { data: session, status } = useSession();
-  const [signature, setSignature] = useLocalStorage("gmailsend_signature", "");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [sigDialogOpen, setSigDialogOpen] = useState(false);
 
@@ -28,14 +26,18 @@ export default function Home() {
     handleNewCampaign,
     handleRenameCampaign,
     handleDeleteCampaign,
+    handleDuplicateCampaign,
     handleAddFollowUp,
     handleDeleteNode,
+    signature,
+    updateSignature,
+    loading: batchesLoading,
   } = useBatches();
 
   const selectedBatch = batches.find((b) => b.id === selectedNodeId);
   const campaignChain = activeCampaignId ? getCampaignChain(activeCampaignId) : [];
 
-  if (status === "loading") {
+  if (status === "loading" || (status === "authenticated" && batchesLoading)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white">
         <Loader2 className="h-6 w-6 animate-spin text-neutral-300" />
@@ -78,6 +80,11 @@ export default function Home() {
         }}
         onNew={handleNewCampaign}
         onRename={handleRenameCampaign}
+        onDuplicate={async (id) => {
+          const copiedId = await handleDuplicateCampaign(id);
+          if (copiedId) setSelectedNodeId(null);
+          return copiedId;
+        }}
         onDelete={handleDeleteCampaign}
         onSignature={() => setSigDialogOpen(true)}
         session={session}
@@ -89,8 +96,8 @@ export default function Home() {
             chain={campaignChain}
             selectedNodeId={selectedNodeId}
             onNodeClick={setSelectedNodeId}
-            onAddFollowUp={(parentId) => {
-              const newId = handleAddFollowUp(parentId);
+            onAddFollowUp={async (parentId) => {
+              const newId = await handleAddFollowUp(parentId);
               if (newId) setSelectedNodeId(newId);
             }}
             onDeleteNode={(id) => {
@@ -118,7 +125,7 @@ export default function Home() {
         open={sigDialogOpen}
         onOpenChange={setSigDialogOpen}
         signature={signature}
-        onSave={setSignature}
+        onSave={updateSignature}
       />
     </div>
   );

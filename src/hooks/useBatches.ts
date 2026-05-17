@@ -1,52 +1,194 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useLocalStorage } from "./useLocalStorage";
-import { Batch, createBatch, migrateLegacyData } from "@/lib/batches";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useSession } from "next-auth/react";
+import { toast } from "sonner";
+import { Batch, ContactRow } from "@/lib/batches";
+
+const FLUSH_DELAY_MS = 500;
+
+interface PendingFlush {
+  // Non-contact fields go through PATCH /api/batches/:id.
+  patch: Record<string, unknown>;
+  // Contact array goes through PUT /api/batches/:id/contacts.
+  contacts?: ContactRow[];
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+type BatchPatchInput = Partial<Batch>;
+
+function patchToWire(patch: BatchPatchInput): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const keys: (keyof Batch)[] = [
+    "name",
+    "subject",
+    "body",
+    "status",
+    "scheduledAt",
+    "scheduledDelay",
+    "scheduledJobId",
+    "sentAt",
+    "recipientResults",
+  ];
+  for (const k of keys) {
+    if (k in patch) out[k] = patch[k] ?? null;
+  }
+  return out;
+}
 
 export function useBatches() {
-  const [batches, setBatches] = useLocalStorage<Batch[]>("gmailsend_batches", []);
+  const { status: sessionStatus } = useSession();
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [signature, setSignatureState] = useState<string>("");
+  const [loading, setLoading] = useState(true);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
 
+  const pendingRef = useRef<Map<string, PendingFlush>>(new Map());
+  const sigTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Initial load: pull the whole tree from the server ─────────────────────
+  // Wait until next-auth has resolved the session before hitting /api/sync,
+  // otherwise the request fires unauthenticated and 401s.
   useEffect(() => {
-    if (batches.length === 0) {
-      const migrated = migrateLegacyData();
-      const initial = migrated ?? [createBatch("Campaign 1")];
-      setBatches(initial);
+    if (sessionStatus !== "authenticated") {
+      if (sessionStatus === "unauthenticated") setLoading(false);
       return;
     }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/sync");
+        if (!res.ok) throw new Error(`sync failed: ${res.status}`);
+        const data = (await res.json()) as { signature: string; batches: Batch[] };
+        if (cancelled) return;
+        setSignatureState(data.signature ?? "");
 
-    const needsContactIds = batches.some((b) => b.contacts.some((c) => !c.id));
-    const needsResultMigration = batches.some((b) => b.sentResults && !b.recipientResults);
-    if (!needsContactIds && !needsResultMigration) return;
-
-    setBatches((prev) =>
-      prev.map((b) => {
-        let next = b;
-        if (next.contacts.some((c) => !c.id)) {
-          next = {
-            ...next,
-            contacts: next.contacts.map((c) => (c.id ? c : { ...c, id: crypto.randomUUID() })),
-          };
+        // Bootstrap: first-ever user has zero batches. Create one campaign so
+        // the canvas isn't empty.
+        if (!data.batches?.length) {
+          const created = await fetch("/api/campaigns", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: "Campaign 1" }),
+          });
+          if (!created.ok) throw new Error(`bootstrap failed: ${created.status}`);
+          const { batch } = (await created.json()) as { batch: Batch };
+          if (cancelled) return;
+          setBatches([batch]);
+        } else {
+          setBatches(data.batches);
         }
-        if (next.sentResults && !next.recipientResults) {
-          next = {
-            ...next,
-            recipientResults: next.sentResults.map((r) => ({
-              email: r.email,
-              status: "sent" as const,
-              messageId: r.messageId,
-              threadId: r.threadId,
-              mimeMessageId: r.mimeMessageId,
-            })),
-            sentResults: undefined,
-          };
-        }
-        return next;
-      })
-    );
-  }, [batches, setBatches]);
+      } catch (err) {
+        console.error("Failed to load sync state:", err);
+        toast.error("Failed to load your campaigns. Refresh to retry.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sessionStatus]);
 
+  // ── Per-batch debounced flush ─────────────────────────────────────────────
+  const flush = useCallback(async (id: string) => {
+    const entry = pendingRef.current.get(id);
+    if (!entry) return;
+    pendingRef.current.delete(id);
+    if (entry.timer) clearTimeout(entry.timer);
+
+    const reqs: Promise<Response>[] = [];
+    if (Object.keys(entry.patch).length > 0) {
+      reqs.push(
+        fetch(`/api/batches/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(entry.patch),
+        })
+      );
+    }
+    if (entry.contacts !== undefined) {
+      reqs.push(
+        fetch(`/api/batches/${id}/contacts`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contacts: entry.contacts }),
+        })
+      );
+    }
+    try {
+      const results = await Promise.all(reqs);
+      for (const r of results) {
+        if (!r.ok) {
+          const msg = await r.json().catch(() => ({ error: r.statusText }));
+          throw new Error(msg.error || `HTTP ${r.status}`);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to persist batch update:", err);
+      toast.error("Failed to save changes. Refresh to recover.");
+    }
+  }, []);
+
+  const scheduleFlush = useCallback((id: string) => {
+    const entry = pendingRef.current.get(id);
+    if (!entry) return;
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => flush(id), FLUSH_DELAY_MS);
+  }, [flush]);
+
+  // Flush everything in flight on tab hide / navigation away.
+  useEffect(() => {
+    function flushAll() {
+      const ids = Array.from(pendingRef.current.keys());
+      ids.forEach((id) => flush(id));
+    }
+    window.addEventListener("beforeunload", flushAll);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flushAll();
+    });
+    return () => {
+      window.removeEventListener("beforeunload", flushAll);
+    };
+  }, [flush]);
+
+  // ── Mutations: optimistic local update + queue server flush ──────────────
+  const updateBatch = useCallback(
+    (id: string, patch: BatchPatchInput) => {
+      setBatches((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+
+      const entry = pendingRef.current.get(id) ?? { patch: {}, timer: null };
+      if (patch.contacts !== undefined) {
+        entry.contacts = patch.contacts;
+      }
+      // Strip contacts from the PATCH payload — they go on their own endpoint.
+      const { contacts: _drop, ...rest } = patch;
+      void _drop;
+      const wire = patchToWire(rest);
+      entry.patch = { ...entry.patch, ...wire };
+      pendingRef.current.set(id, entry);
+      scheduleFlush(id);
+    },
+    [scheduleFlush]
+  );
+
+  const updateSignature = useCallback((next: string) => {
+    setSignatureState(next);
+    if (sigTimerRef.current) clearTimeout(sigTimerRef.current);
+    sigTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/signature", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ signature: next }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (err) {
+        console.error("Failed to save signature:", err);
+        toast.error("Failed to save signature.");
+      }
+    }, FLUSH_DELAY_MS);
+  }, []);
+
+  // ── Derived ──────────────────────────────────────────────────────────────
   const campaigns = batches.filter((b) => !b.parentBatchId);
   const activeCampaignId =
     (selectedCampaignId && batches.find((b) => b.id === selectedCampaignId)?.id) ??
@@ -71,25 +213,34 @@ export function useBatches() {
     [batches]
   );
 
-  function updateBatch(id: string, patch: Partial<Batch>) {
-    setBatches((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
-  }
-
-  function handleNewCampaign(): string {
+  // ── Tree mutations: server-first so we have authoritative ids ────────────
+  async function handleNewCampaign(): Promise<string> {
     const existingNames = new Set(batches.map((b) => b.name));
     let num = campaigns.length + 1;
     while (existingNames.has(`Campaign ${num}`)) num++;
-    const batch = createBatch(`Campaign ${num}`);
-    setBatches((prev) => [...prev, batch]);
-    setSelectedCampaignId(batch.id);
-    return batch.id;
+    try {
+      const res = await fetch("/api/campaigns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: `Campaign ${num}` }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { batch } = (await res.json()) as { batch: Batch };
+      setBatches((prev) => [...prev, batch]);
+      setSelectedCampaignId(batch.id);
+      return batch.id;
+    } catch (err) {
+      console.error("Failed to create campaign:", err);
+      toast.error("Failed to create campaign.");
+      return "";
+    }
   }
 
   function handleRenameCampaign(id: string, name: string) {
-    setBatches((prev) => prev.map((b) => (b.id === id ? { ...b, name } : b)));
+    updateBatch(id, { name });
   }
 
-  function handleDeleteCampaign(id: string) {
+  async function handleDeleteCampaign(id: string) {
     if (campaigns.length === 1) return;
     const toDelete = collectDescendants(id);
     const remaining = batches.filter((b) => !toDelete.has(b.id));
@@ -98,23 +249,55 @@ export function useBatches() {
       const next = remaining.find((b) => !b.parentBatchId);
       setSelectedCampaignId(next?.id ?? "");
     }
+    try {
+      const res = await fetch(`/api/batches/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.error("Failed to delete campaign:", err);
+      toast.error("Failed to delete. Refresh to recover.");
+    }
   }
 
-  function handleAddFollowUp(parentId: string): string {
+  async function handleDuplicateCampaign(id: string): Promise<string> {
+    const toDuplicate = collectDescendants(id);
+    try {
+      await Promise.all(Array.from(toDuplicate).map((batchId) => flush(batchId)));
+      const res = await fetch(`/api/batches/${id}/duplicate`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const { batches: copied } = (await res.json()) as { batches: Batch[] };
+      const copiedRoot = copied.find((b) => !b.parentBatchId);
+      if (!copiedRoot) throw new Error("Duplicated campaign did not include a root batch");
+      setBatches((prev) => [...prev, ...copied]);
+      setSelectedCampaignId(copiedRoot.id);
+      toast.success("Campaign duplicated.");
+      return copiedRoot.id;
+    } catch (err) {
+      console.error("Failed to duplicate campaign:", err);
+      toast.error("Failed to duplicate campaign.");
+      return "";
+    }
+  }
+
+  async function handleAddFollowUp(parentId: string): Promise<string> {
     const parent = batches.find((b) => b.id === parentId);
     if (!parent) return "";
-    const followUp = createBatch("Follow Up", {
-      parentBatchId: parentId,
-      subject: parent.subject,
-      body: "",
-      contacts: parent.contacts.map((c) => ({ ...c })),
-      scheduledDelay: { value: 3, unit: "days" },
-    });
-    setBatches((prev) => [...prev, followUp]);
-    return followUp.id;
+    try {
+      const res = await fetch(`/api/batches/${parentId}/follow-up`, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { batch } = (await res.json()) as { batch: Batch };
+      setBatches((prev) => [...prev, batch]);
+      return batch.id;
+    } catch (err) {
+      console.error("Failed to add follow-up:", err);
+      toast.error("Failed to add follow-up.");
+      return "";
+    }
   }
 
-  function handleDeleteNode(id: string) {
+  async function handleDeleteNode(id: string) {
     const node = batches.find((b) => b.id === id);
     if (!node) return;
     const isRoot = !node.parentBatchId;
@@ -125,6 +308,13 @@ export function useBatches() {
     if (toDelete.has(activeCampaignId)) {
       const next = remaining.find((b) => !b.parentBatchId);
       setSelectedCampaignId(next?.id ?? "");
+    }
+    try {
+      const res = await fetch(`/api/batches/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.error("Failed to delete batch:", err);
+      toast.error("Failed to delete. Refresh to recover.");
     }
   }
 
@@ -150,7 +340,11 @@ export function useBatches() {
     handleNewCampaign,
     handleRenameCampaign,
     handleDeleteCampaign,
+    handleDuplicateCampaign,
     handleAddFollowUp,
     handleDeleteNode,
+    signature,
+    updateSignature,
+    loading,
   };
 }

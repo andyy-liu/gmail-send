@@ -55,6 +55,7 @@ create table public.app_users (
   email citext not null unique,
   name text,
   image_url text,
+  signature_html text not null default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -94,8 +95,11 @@ create table public.batches (
   signature_html text not null default '',
   status public.batch_status not null default 'draft',
   scheduled_at timestamptz,
-  scheduled_delay_value integer,
+  scheduled_delay_value numeric,
   scheduled_delay_unit text check (scheduled_delay_unit in ('hours', 'days')),
+  recipient_results jsonb,
+  -- scheduled_job_id FK is added after send_jobs is defined to avoid forward refs.
+  scheduled_job_id uuid,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   sent_at timestamptz,
@@ -202,6 +206,10 @@ create index send_recipients_next_attempt_idx on public.send_recipients(status, 
   where status in ('pending', 'failed');
 create index email_artifacts_batch_id_idx on public.email_artifacts(batch_id);
 
+alter table public.batches
+  add constraint batches_scheduled_job_id_fkey
+  foreign key (scheduled_job_id) references public.send_jobs(id) on delete set null;
+
 create or replace function public.touch_updated_at()
 returns trigger
 language plpgsql
@@ -272,4 +280,3 @@ grant select, insert, update, delete on table
   public.send_recipients,
   public.email_artifacts
 to service_role;
-

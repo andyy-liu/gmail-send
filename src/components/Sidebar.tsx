@@ -17,8 +17,9 @@ interface SidebarProps {
   campaigns: Batch[];
   activeCampaignId: string;
   onSelect: (id: string) => void;
-  onNew: () => string;
+  onNew: () => Promise<string>;
   onRename: (id: string, name: string) => void;
+  onDuplicate: (id: string) => Promise<string>;
   onDelete: (id: string) => void;
   onSignature: () => void;
   session: Session;
@@ -30,6 +31,7 @@ export function Sidebar({
   onSelect,
   onNew,
   onRename,
+  onDuplicate,
   onDelete,
   onSignature,
   session,
@@ -59,8 +61,9 @@ export function Sidebar({
     setEditingId(null);
   }
 
-  function handleNewCampaign() {
-    const id = onNew();
+  async function handleNewCampaign() {
+    const id = await onNew();
+    if (!id) return;
     startRename(id, "");
     setEditName("");
   }
@@ -128,6 +131,15 @@ export function Sidebar({
                       }}
                     >
                       Rename
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="text-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void onDuplicate(c.id);
+                      }}
+                    >
+                      Duplicate
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       className="text-xs text-red-600"
