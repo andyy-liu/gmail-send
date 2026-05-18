@@ -7,6 +7,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { WorkflowCanvas } from "@/components/WorkflowCanvas";
 import { NodeDrawer } from "@/components/NodeDrawer";
 import { SignatureDialog } from "@/components/SignatureDialog";
+import { VariablesDialog } from "@/components/VariablesDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
@@ -15,6 +16,7 @@ export default function Home() {
   const { data: session, status } = useSession();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [sigDialogOpen, setSigDialogOpen] = useState(false);
+  const [varsDialogOpen, setVarsDialogOpen] = useState(false);
 
   const {
     batches,
@@ -31,6 +33,11 @@ export default function Home() {
     handleDeleteNode,
     signature,
     updateSignature,
+    variables,
+    createVariable,
+    renameVariable,
+    setVariableEnabled,
+    deleteVariable,
     loading: batchesLoading,
   } = useBatches();
 
@@ -87,6 +94,7 @@ export default function Home() {
         }}
         onDelete={handleDeleteCampaign}
         onSignature={() => setSigDialogOpen(true)}
+        onVariables={() => setVarsDialogOpen(true)}
         session={session}
       />
 
@@ -117,6 +125,7 @@ export default function Home() {
         batch={selectedBatch}
         batches={batches}
         signature={signature}
+        variables={variables}
         onUpdate={(patch) => selectedNodeId && updateBatch(selectedNodeId, patch)}
         onClose={() => setSelectedNodeId(null)}
       />
@@ -126,6 +135,17 @@ export default function Home() {
         onOpenChange={setSigDialogOpen}
         signature={signature}
         onSave={updateSignature}
+      />
+
+      <VariablesDialog
+        open={varsDialogOpen}
+        onOpenChange={setVarsDialogOpen}
+        variables={variables}
+        batches={batches}
+        onCreate={createVariable}
+        onRename={renameVariable}
+        onToggleEnabled={setVariableEnabled}
+        onDelete={deleteVariable}
       />
     </div>
   );

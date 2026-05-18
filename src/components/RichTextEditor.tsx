@@ -16,12 +16,15 @@ import {
   List, ListOrdered, AlignLeft, AlignCenter, AlignRight,
   Link2, Link2Off, Palette
 } from "lucide-react";
+import { VariableChips } from "@/components/VariableChips";
+import type { CustomVariable } from "@/lib/variables";
 
 interface RichTextEditorProps {
   content: string;
   onChange: (html: string) => void;
   placeholder?: string;
   readOnly?: boolean;
+  variables?: CustomVariable[];
 }
 
 const FONT_SIZES = ["8", "10", "12", "14", "16", "18", "20", "24", "28", "32"];
@@ -30,7 +33,7 @@ const COLORS = [
   "#2563eb", "#16a34a", "#9333ea", "#db2777",
 ];
 
-export function RichTextEditor({ content, onChange, placeholder, readOnly = false }: RichTextEditorProps) {
+export function RichTextEditor({ content, onChange, placeholder, readOnly = false, variables }: RichTextEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -194,6 +197,15 @@ export function RichTextEditor({ content, onChange, placeholder, readOnly = fals
           <Link2Off className="h-3.5 w-3.5" />
         </Toggle>
       </div>
+      )}
+
+      {!readOnly && variables && (
+        <div className="px-2 py-1.5 border-b bg-neutral-50/60 dark:bg-neutral-800/40">
+          <VariableChips
+            variables={variables}
+            onInsert={(token) => editor.chain().focus().insertContent(token).run()}
+          />
+        </div>
       )}
 
       {/* Editor Content */}

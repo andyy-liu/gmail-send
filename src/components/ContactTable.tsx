@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ContactRow, RecipientResult } from "@/lib/batches";
 import { Trash2, Plus, Upload, Eraser, CheckCircle2, AlertCircle, MailMinus, Clock } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import type { CustomVariable } from "@/lib/variables";
 
 interface ContactTableProps {
   contacts: ContactRow[];
@@ -14,6 +15,12 @@ interface ContactTableProps {
   recipientResults?: RecipientResult[];
   /** Shown above the table when readOnly (e.g. "Inherits from parent"). */
   readOnlyNotice?: string;
+  /** Custom variables; enabled ones become columns. */
+  variables?: CustomVariable[];
+}
+
+function normalizeHeader(h: string): string {
+  return h.toLowerCase().replace(/[\s_]+/g, "");
 }
 
 function parseCSVLine(line: string): string[] {
@@ -49,19 +56,42 @@ function parseCSVLine(line: string): string[] {
   return fields;
 }
 
-function parseCSV(text: string): ContactRow[] {
+function parseCSV(text: string, variables: CustomVariable[]): ContactRow[] {
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   if (lines.length < 2) return [];
-  const headers = parseCSVLine(lines[0]).map((h) => h.toLowerCase().replace(/\s+/g, ""));
+
+  const rawHeaders = parseCSVLine(lines[0]);
+  // Map every header column to a target field. For built-ins we use the
+  // normalised name; for custom variables we keep the original variable name
+  // so we can write straight into customFields.
+  const headerTargets = rawHeaders.map((h): { kind: "builtin" | "custom" | "skip"; name: string } => {
+    const norm = normalizeHeader(h);
+    if (norm === "email") return { kind: "builtin", name: "email" };
+    if (norm === "firstname") return { kind: "builtin", name: "firstName" };
+    if (norm === "company") return { kind: "builtin", name: "company" };
+    const matched = variables.find((v) => normalizeHeader(v.name) === norm);
+    if (matched) return { kind: "custom", name: matched.name };
+    return { kind: "skip", name: "" };
+  });
+
   return lines.slice(1).flatMap((line) => {
     const values = parseCSVLine(line);
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => { row[h] = values[i] ?? ""; });
-    const email = row["email"] ?? "";
-    const firstName = row["firstname"] ?? row["first_name"] ?? "";
-    const company = row["company"] ?? "";
-    if (!email && !firstName && !company) return [];
-    return [{ id: crypto.randomUUID(), email, firstName, company }];
+    let email = "";
+    let firstName = "";
+    let company = "";
+    const customFields: Record<string, string> = {};
+    headerTargets.forEach((t, i) => {
+      const v = values[i] ?? "";
+      if (t.kind === "builtin") {
+        if (t.name === "email") email = v;
+        else if (t.name === "firstName") firstName = v;
+        else if (t.name === "company") company = v;
+      } else if (t.kind === "custom") {
+        customFields[t.name] = v;
+      }
+    });
+    if (!email && !firstName && !company && Object.keys(customFields).length === 0) return [];
+    return [{ id: crypto.randomUUID(), email, firstName, company, customFields }];
   });
 }
 
@@ -106,6 +136,7 @@ export function ContactTable({
   readOnly = false,
   recipientResults,
   readOnlyNotice,
+  variables,
 }: ContactTableProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   // null = closed, number >= 0 = row index to delete, -1 = clear all
@@ -119,6 +150,11 @@ export function ContactTable({
     return map;
   }, [recipientResults]);
 
+  const enabledVariables = useMemo(
+    () => (variables ?? []).filter((v) => v.enabled).sort((a, b) => a.position - b.position),
+    [variables]
+  );
+
   const showStatusColumn = !!recipientResults;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -127,16 +163,23 @@ export function ContactTable({
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      const parsed = parseCSV(text);
+      const parsed = parseCSV(text, variables ?? []);
       if (parsed.length > 0) setContacts(parsed);
     };
     reader.readAsText(file);
     e.target.value = "";
   };
 
-  const updateContact = (index: number, field: keyof ContactRow, value: string) => {
+  const updateContact = (index: number, field: "email" | "firstName" | "company", value: string) => {
     const updated = [...contacts];
     updated[index] = { ...updated[index], [field]: value };
+    setContacts(updated);
+  };
+
+  const updateCustomField = (index: number, name: string, value: string) => {
+    const updated = [...contacts];
+    const current = updated[index].customFields ?? {};
+    updated[index] = { ...updated[index], customFields: { ...current, [name]: value } };
     setContacts(updated);
   };
 
@@ -145,7 +188,7 @@ export function ContactTable({
   };
 
   const addContact = () => {
-    setContacts([...contacts, { id: crypto.randomUUID(), email: "", firstName: "", company: "" }]);
+    setContacts([...contacts, { id: crypto.randomUUID(), email: "", firstName: "", company: "", customFields: {} }]);
   };
 
   const inputClass = readOnly
@@ -165,6 +208,9 @@ export function ContactTable({
               <TableHead>Target Email</TableHead>
               <TableHead>First Name</TableHead>
               <TableHead>Company</TableHead>
+              {enabledVariables.map((v) => (
+                <TableHead key={v.id}>{v.name}</TableHead>
+              ))}
               {!readOnly && <TableHead className="w-[60px] text-right">Actions</TableHead>}
             </TableRow>
           </TableHeader>
@@ -206,6 +252,18 @@ export function ContactTable({
                     className={inputClass}
                   />
                 </TableCell>
+                {enabledVariables.map((v) => (
+                  <TableCell key={v.id}>
+                    <Input
+                      placeholder={v.name}
+                      value={contact.customFields?.[v.name] ?? ""}
+                      onChange={(e) => updateCustomField(i, v.name, e.target.value)}
+                      readOnly={readOnly}
+                      tabIndex={readOnly ? -1 : 0}
+                      className={inputClass}
+                    />
+                  </TableCell>
+                ))}
                 {!readOnly && (
                   <TableCell className="text-right">
                     <Button variant="ghost" size="icon" onClick={() => setConfirmTarget(i)} className="text-neutral-400 hover:text-red-500">

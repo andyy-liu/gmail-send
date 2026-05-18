@@ -21,6 +21,7 @@ import {
   CalendarIcon,
 } from "lucide-react";
 import { Batch, RecipientResult, RecipientResultStatus } from "@/lib/batches";
+import type { CustomVariable } from "@/lib/variables";
 import { useEmailSend } from "@/hooks/useEmailSend";
 import { ContactTable } from "@/components/ContactTable";
 import { TemplateEditor } from "@/components/TemplateEditor";
@@ -37,6 +38,7 @@ interface NodeDrawerProps {
   batch: Batch | undefined;
   batches: Batch[];
   signature: string;
+  variables: CustomVariable[];
   onUpdate: (patch: Partial<Batch>) => void;
   onClose: () => void;
 }
@@ -188,6 +190,7 @@ export function NodeDrawer({
   batch,
   batches,
   signature,
+  variables,
   onUpdate,
   onClose,
 }: NodeDrawerProps) {
@@ -268,6 +271,7 @@ export function NodeDrawer({
     batches,
     signature,
     scheduledAt,
+    variables,
     onBatchUpdate: onUpdate,
   });
 
@@ -535,6 +539,7 @@ export function NodeDrawer({
                   setBody={(v) => onUpdate({ body: v })}
                   subjectReadOnly={isFollowUp}
                   readOnly={locked}
+                  variables={variables}
                 />
               </>
             )}
@@ -574,6 +579,7 @@ export function NodeDrawer({
                       : undefined
                   }
                   recipientResults={batch.recipientResults}
+                  variables={variables}
                 />
               </>
             )}

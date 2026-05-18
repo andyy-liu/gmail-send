@@ -142,6 +142,7 @@ export async function scheduleJob(params: ScheduleJobParams): Promise<string> {
           email: c.email,
           first_name: c.firstName,
           company: c.company,
+          custom_fields: c.customFields ?? {},
           status: "pending",
           next_attempt_at: scheduledAt,
           idempotency_key: rowKey,
@@ -305,15 +306,35 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
   const claimedIds = candidateIds.filter((id) => claimedSet.has(id));
 
   // Restart recovery: a previous worker may have crashed between flipping a
-  // recipient to 'sending' and recording the Gmail response. Now that we own
-  // the job, reset any 'sending' rows so we can retry them. We accept the
-  // small chance of a duplicate send if the prior worker did reach Gmail.
+  // recipient to 'sending' and recording the Gmail response. Reset only the
+  // rows that have NO gmail_message_id — those provably never had a Gmail id
+  // written back to us. Rows with a message id are left in 'sending' and
+  // promoted to 'sent' just below; resending them would duplicate a message
+  // we know the recipient already received.
+  //
+  // Residual at-least-once gap: gmail.users.messages.send returns 200, our
+  // worker crashes before writing the row, AND the response never makes it
+  // back to us. The recipient gets the email but we have no record of it,
+  // so recovery retries and they receive a duplicate. True dedup needs an
+  // idempotency key Gmail respects; Gmail doesn't offer one, so this is the
+  // closest we can get without adding our own Message-ID lookup loop.
   const { error: recoverError } = await db
     .from("send_recipients")
     .update({ status: "pending" })
     .in("job_id", claimedIds)
-    .eq("status", "sending");
+    .eq("status", "sending")
+    .is("gmail_message_id", null);
   if (recoverError) console.error("Failed to recover stuck sending recipients:", recoverError);
+
+  // Sweep up the other half: 'sending' rows that DO have a gmail_message_id
+  // are recoverable to 'sent' without re-calling Gmail.
+  const { error: promoteError } = await db
+    .from("send_recipients")
+    .update({ status: "sent", sent_at: new Date().toISOString() })
+    .in("job_id", claimedIds)
+    .eq("status", "sending")
+    .not("gmail_message_id", "is", null);
+  if (promoteError) console.error("Failed to promote completed sends:", promoteError);
 
   const errors: string[] = [];
   let processed = 0;
@@ -384,7 +405,7 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
       const { data: recipients, error: recipientsError } = await db
         .from("send_recipients")
         .select(
-          "id, email, first_name, company, attempts, parent_thread_id, parent_mime_message_id"
+          "id, email, first_name, company, custom_fields, attempts, parent_thread_id, parent_mime_message_id"
         )
         .eq("job_id", jobId)
         .eq("status", "pending")
@@ -411,6 +432,7 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
           email: recipient.email,
           firstName: recipient.first_name,
           company: recipient.company,
+          customFields: (recipient.custom_fields ?? {}) as Record<string, string>,
         };
         let parentThreadId = recipient.parent_thread_id;
         let parentMimeMessageId = recipient.parent_mime_message_id;

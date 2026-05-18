@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import { Batch, ContactRow } from "@/lib/batches";
+import type { CustomVariable } from "@/lib/variables";
 
 const FLUSH_DELAY_MS = 500;
 
@@ -17,20 +18,18 @@ interface PendingFlush {
 
 type BatchPatchInput = Partial<Batch>;
 
+/**
+ * Keys the server PATCH route accepts. status, sentAt, recipientResults,
+ * scheduledAt and scheduledJobId are deliberately excluded — they're written
+ * by the server endpoints that prove the underlying Gmail / scheduler action
+ * actually happened. We still keep them in local React state for snappy UI;
+ * we just don't ship them over the wire.
+ */
+const WIRE_PATCH_KEYS: (keyof Batch)[] = ["name", "subject", "body", "scheduledDelay"];
+
 function patchToWire(patch: BatchPatchInput): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  const keys: (keyof Batch)[] = [
-    "name",
-    "subject",
-    "body",
-    "status",
-    "scheduledAt",
-    "scheduledDelay",
-    "scheduledJobId",
-    "sentAt",
-    "recipientResults",
-  ];
-  for (const k of keys) {
+  for (const k of WIRE_PATCH_KEYS) {
     if (k in patch) out[k] = patch[k] ?? null;
   }
   return out;
@@ -40,6 +39,7 @@ export function useBatches() {
   const { status: sessionStatus } = useSession();
   const [batches, setBatches] = useState<Batch[]>([]);
   const [signature, setSignatureState] = useState<string>("");
+  const [variables, setVariables] = useState<CustomVariable[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
 
@@ -59,9 +59,14 @@ export function useBatches() {
       try {
         const res = await fetch("/api/sync");
         if (!res.ok) throw new Error(`sync failed: ${res.status}`);
-        const data = (await res.json()) as { signature: string; batches: Batch[] };
+        const data = (await res.json()) as {
+          signature: string;
+          batches: Batch[];
+          variables: CustomVariable[];
+        };
         if (cancelled) return;
         setSignatureState(data.signature ?? "");
+        setVariables(data.variables ?? []);
 
         // Bootstrap: first-ever user has zero batches. Create one campaign so
         // the canvas isn't empty.
@@ -169,6 +174,109 @@ export function useBatches() {
     },
     [scheduleFlush]
   );
+
+  const createVariable = useCallback(async (name: string): Promise<CustomVariable | null> => {
+    try {
+      const res = await fetch("/api/variables", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const variable = data.variable as CustomVariable;
+      setVariables((prev) => [...prev, variable]);
+      return variable;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create variable");
+      return null;
+    }
+  }, []);
+
+  const setVariableEnabled = useCallback(async (id: string, enabled: boolean) => {
+    setVariables((prev) => prev.map((v) => (v.id === id ? { ...v, enabled } : v)));
+    try {
+      const res = await fetch(`/api/variables/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update variable");
+      setVariables((prev) => prev.map((v) => (v.id === id ? { ...v, enabled: !enabled } : v)));
+    }
+  }, []);
+
+  const renameVariable = useCallback(async (id: string, newName: string): Promise<boolean> => {
+    const previous = variables.find((v) => v.id === id);
+    if (!previous) return false;
+    try {
+      const res = await fetch(`/api/variables/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const updated = data.variable as CustomVariable;
+      // Mirror the server-side rewrite onto local templates + contacts so the
+      // UI doesn't drift until the next sync.
+      setVariables((prev) => prev.map((v) => (v.id === id ? updated : v)));
+      const escaped = previous.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const tokenRe = new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, "g");
+      const renameKey = (fields: Record<string, string>) => {
+        if (!Object.prototype.hasOwnProperty.call(fields, previous.name)) return fields;
+        const next = { ...fields, [updated.name]: fields[previous.name] };
+        delete next[previous.name];
+        return next;
+      };
+      setBatches((prev) =>
+        prev.map((b) => ({
+          ...b,
+          subject: b.subject.replace(tokenRe, `{{${updated.name}}}`),
+          body: b.body.replace(tokenRe, `{{${updated.name}}}`),
+          contacts: b.contacts.map((c) => ({ ...c, customFields: renameKey(c.customFields ?? {}) })),
+        }))
+      );
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to rename variable");
+      return false;
+    }
+  }, [variables]);
+
+  const deleteVariable = useCallback(async (id: string) => {
+    const previous = variables.find((v) => v.id === id);
+    setVariables((prev) => prev.filter((v) => v.id !== id));
+    try {
+      const res = await fetch(`/api/variables/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      // Drop the now-orphaned key from local contacts to keep state clean.
+      if (previous) {
+        setBatches((prev) =>
+          prev.map((b) => ({
+            ...b,
+            contacts: b.contacts.map((c) => {
+              if (!c.customFields || !(previous.name in c.customFields)) return c;
+              const next = { ...c.customFields };
+              delete next[previous.name];
+              return { ...c, customFields: next };
+            }),
+          }))
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete variable");
+      if (previous) setVariables((prev) => [...prev, previous].sort((a, b) => a.position - b.position));
+    }
+  }, [variables]);
 
   const updateSignature = useCallback((next: string) => {
     setSignatureState(next);
@@ -345,6 +453,11 @@ export function useBatches() {
     handleDeleteNode,
     signature,
     updateSignature,
+    variables,
+    createVariable,
+    renameVariable,
+    setVariableEnabled,
+    deleteVariable,
     loading,
   };
 }

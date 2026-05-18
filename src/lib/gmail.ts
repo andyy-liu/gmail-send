@@ -4,6 +4,7 @@ export interface Contact {
   email: string;
   firstName: string;
   company: string;
+  customFields?: Record<string, string>;
 }
 
 /** Strip CR and LF to prevent MIME header injection */
@@ -20,14 +21,26 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Replace {{FirstName}}, {{Company}}, and {{Signature}} in both subject (plain) and HTML body */
+/**
+ * Replace {{FirstName}}, {{Company}}, {{Signature}}, and any user-defined
+ * {{Variable}} tokens. Custom field values come from `contact.customFields`
+ * and are escaped the same way as built-ins when rendering HTML.
+ */
 function processTemplate(template: string, contact: Contact, isHtml = false, signatureHtml = ""): string {
   const firstName = isHtml ? escapeHtml(contact.firstName) : contact.firstName;
   const company = isHtml ? escapeHtml(contact.company) : contact.company;
-  return template
-    .replace(/\{\{FirstName\}\}/g, firstName)
-    .replace(/\{\{Company\}\}/g, company)
-    .replace(/\{\{Signature\}\}/g, isHtml ? cleanListHtml(signatureHtml) : "");
+  const customFields = contact.customFields ?? {};
+
+  return template.replace(/\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g, (match, name: string) => {
+    if (name === "FirstName") return firstName;
+    if (name === "Company") return company;
+    if (name === "Signature") return isHtml ? cleanListHtml(signatureHtml) : "";
+    if (Object.prototype.hasOwnProperty.call(customFields, name)) {
+      const value = customFields[name] ?? "";
+      return isHtml ? escapeHtml(value) : value;
+    }
+    return match;
+  });
 }
 
 /**

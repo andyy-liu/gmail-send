@@ -1,5 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Batch, ContactRow, RecipientResult } from "@/lib/batches";
+import type { CustomVariable } from "@/lib/variables";
+import { listVariables } from "@/lib/sync/variables-repo";
 
 // DB enum maps. The schema uses 'draft' where the UI uses 'active'.
 type DbBatchStatus = "draft" | "drafted" | "scheduled" | "sending" | "sent" | "partial_failed" | "failed" | "cancelled";
@@ -44,6 +46,7 @@ interface DbContact {
   email: string;
   first_name: string;
   company: string;
+  custom_fields: Record<string, string> | null;
   position: number;
 }
 
@@ -72,11 +75,21 @@ function rowToBatch(b: DbBatch, contacts: ContactRow[]): Batch {
 }
 
 function dbContactToRow(c: DbContact): ContactRow {
-  return { id: c.id, email: c.email, firstName: c.first_name, company: c.company };
+  return {
+    id: c.id,
+    email: c.email,
+    firstName: c.first_name,
+    company: c.company,
+    customFields: c.custom_fields ?? {},
+  };
 }
 
-/** Load the full editor state for a user: signature + every batch with contacts. */
-export async function loadUserState(userId: string): Promise<{ signature: string; batches: Batch[] }> {
+/** Load the full editor state for a user: signature + variables + every batch with contacts. */
+export async function loadUserState(userId: string): Promise<{
+  signature: string;
+  batches: Batch[];
+  variables: CustomVariable[];
+}> {
   const db = createAdminClient();
 
   const { data: user, error: userErr } = await db
@@ -100,7 +113,7 @@ export async function loadUserState(userId: string): Promise<{ signature: string
   if (batchIds.length) {
     const { data: contactRows, error: contactsErr } = await db
       .from("contacts")
-      .select("id, batch_id, email, first_name, company, position")
+      .select("id, batch_id, email, first_name, company, custom_fields, position")
       .in("batch_id", batchIds)
       .order("position", { ascending: true });
     if (contactsErr) throw contactsErr;
@@ -116,7 +129,9 @@ export async function loadUserState(userId: string): Promise<{ signature: string
     rowToBatch(b, contactsByBatch.get(b.id) ?? [])
   );
 
-  return { signature: user?.signature_html ?? "", batches };
+  const variables = await listVariables(userId);
+
+  return { signature: user?.signature_html ?? "", batches, variables };
 }
 
 /** Create a new campaign with an empty root batch. Returns the root batch. */
@@ -161,7 +176,7 @@ export async function createCampaign(userId: string, name: string): Promise<Batc
       company: "",
       position: 0,
     })
-    .select("id, batch_id, email, first_name, company, position");
+    .select("id, batch_id, email, first_name, company, custom_fields, position");
   if (contactErr) throw contactErr;
 
   return rowToBatch(batch as DbBatch, (contactRows ?? []).map(dbContactToRow));
@@ -264,7 +279,7 @@ export async function duplicateCampaign(userId: string, rootBatchId: string): Pr
   const sourceIds = sourceBatches.map((b) => b.id);
   const { data: contactRows, error: contactsErr } = await db
     .from("contacts")
-    .select("id, batch_id, email, first_name, company, position")
+    .select("id, batch_id, email, first_name, company, custom_fields, position")
     .in("batch_id", sourceIds)
     .order("position", { ascending: true });
   if (contactsErr) throw contactsErr;
@@ -329,10 +344,11 @@ export async function duplicateCampaign(userId: string, rootBatchId: string): Pr
               email: c.email,
               first_name: c.first_name,
               company: c.company,
+              custom_fields: c.custom_fields ?? {},
               position: i,
             }))
           )
-          .select("id, batch_id, email, first_name, company, position");
+          .select("id, batch_id, email, first_name, company, custom_fields, position");
         if (insertContactsErr) throw insertContactsErr;
         copiedContactsByBatch.set(copied.id, (copiedContacts ?? []).map(dbContactToRow));
       } else {
@@ -488,10 +504,48 @@ export async function replaceContacts(userId: string, batchId: string, contacts:
     email: c.email,
     first_name: c.firstName,
     company: c.company,
+    custom_fields: c.customFields ?? {},
     position: i,
   }));
   const { error: insErr } = await db.from("contacts").insert(rows);
   if (insErr) throw insErr;
+}
+
+/**
+ * Persist the final outcome of a send/now run. Called from the server route
+ * after the Gmail loop completes so the client can't fabricate sent state.
+ * sentAt is server-clock to avoid trusting any client-provided timestamp.
+ */
+export async function recordSendOutcome(
+  userId: string,
+  batchId: string,
+  recipientResults: RecipientResult[]
+): Promise<void> {
+  const db = createAdminClient();
+  const { error } = await db
+    .from("batches")
+    .update({
+      status: "sent",
+      sent_at: new Date().toISOString(),
+      recipient_results: recipientResults,
+    })
+    .eq("id", batchId)
+    .eq("user_id", userId);
+  if (error) throw error;
+}
+
+/**
+ * Persist that drafts were created for this batch. Status only — drafts have
+ * no thread/message IDs we can use for reply threading later.
+ */
+export async function recordDraftsCreated(userId: string, batchId: string): Promise<void> {
+  const db = createAdminClient();
+  const { error } = await db
+    .from("batches")
+    .update({ status: "drafted" })
+    .eq("id", batchId)
+    .eq("user_id", userId);
+  if (error) throw error;
 }
 
 export async function getSignature(userId: string): Promise<string> {

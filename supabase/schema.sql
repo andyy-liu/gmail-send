@@ -117,9 +117,21 @@ create table public.contacts (
   email citext not null,
   first_name text not null,
   company text not null,
+  custom_fields jsonb not null default '{}'::jsonb,
   position integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+create table public.custom_variables (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.app_users(id) on delete cascade,
+  name text not null,
+  enabled boolean not null default true,
+  position integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, name)
 );
 
 create table public.send_jobs (
@@ -159,6 +171,7 @@ create table public.send_recipients (
   gmail_mime_message_id text,
   parent_thread_id text,
   parent_mime_message_id text,
+  custom_fields jsonb not null default '{}'::jsonb,
   idempotency_key text not null unique,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -198,6 +211,7 @@ create index campaigns_user_id_idx on public.campaigns(user_id);
 create index batches_user_id_idx on public.batches(user_id);
 create index batches_campaign_id_idx on public.batches(campaign_id);
 create index contacts_batch_id_idx on public.contacts(batch_id);
+create index custom_variables_user_id_idx on public.custom_variables(user_id);
 create index send_jobs_due_idx on public.send_jobs(status, scheduled_at)
   where status in ('pending', 'partial_failed');
 create index send_jobs_user_id_idx on public.send_jobs(user_id);
@@ -240,6 +254,10 @@ create trigger contacts_touch_updated_at
 before update on public.contacts
 for each row execute function public.touch_updated_at();
 
+create trigger custom_variables_touch_updated_at
+before update on public.custom_variables
+for each row execute function public.touch_updated_at();
+
 create trigger send_jobs_touch_updated_at
 before update on public.send_jobs
 for each row execute function public.touch_updated_at();
@@ -253,6 +271,7 @@ alter table public.google_accounts enable row level security;
 alter table public.campaigns enable row level security;
 alter table public.batches enable row level security;
 alter table public.contacts enable row level security;
+alter table public.custom_variables enable row level security;
 alter table public.send_jobs enable row level security;
 alter table public.send_recipients enable row level security;
 alter table public.email_artifacts enable row level security;
@@ -265,6 +284,7 @@ revoke all on table
   public.campaigns,
   public.batches,
   public.contacts,
+  public.custom_variables,
   public.send_jobs,
   public.send_recipients,
   public.email_artifacts
@@ -276,6 +296,7 @@ grant select, insert, update, delete on table
   public.campaigns,
   public.batches,
   public.contacts,
+  public.custom_variables,
   public.send_jobs,
   public.send_recipients,
   public.email_artifacts

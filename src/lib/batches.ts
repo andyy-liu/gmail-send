@@ -2,6 +2,7 @@ import { Contact } from "./gmail";
 
 export interface ContactRow extends Contact {
   id: string;
+  customFields: Record<string, string>;
 }
 
 export type RecipientResultStatus = "sent" | "failed" | "skipped_replied";

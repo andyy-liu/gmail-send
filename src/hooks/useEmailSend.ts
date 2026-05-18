@@ -3,12 +3,15 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Batch, RecipientResult } from "@/lib/batches";
+import type { CustomVariable } from "@/lib/variables";
+import { checkTemplateTokens } from "@/lib/variables";
 
 interface UseEmailSendOptions {
   activeBatch: Batch | undefined;
   batches: Batch[];
   signature: string;
   scheduledAt: string;
+  variables: CustomVariable[];
   onBatchUpdate: (patch: Partial<Batch>) => void;
   onScheduled?: () => void;
 }
@@ -33,6 +36,7 @@ export function useEmailSend({
   batches,
   signature,
   scheduledAt,
+  variables,
   onBatchUpdate,
   onScheduled,
 }: UseEmailSendOptions) {
@@ -43,6 +47,22 @@ export function useEmailSend({
     try {
       if (!activeBatch) throw new Error("No active batch.");
       if (!activeBatch.subject || !activeBatch.body) throw new Error("Subject and body are required.");
+
+      const { unknown, disabled } = checkTemplateTokens(
+        activeBatch.subject,
+        activeBatch.body,
+        variables
+      );
+      if (disabled.length) {
+        throw new Error(
+          `Cannot send: template uses disabled variable${disabled.length === 1 ? "" : "s"} ${disabled.map((n) => `{{${n}}}`).join(", ")}. Re-enable in the Variables panel or remove the reference.`
+        );
+      }
+      if (unknown.length) {
+        throw new Error(
+          `Cannot send: template references unknown variable${unknown.length === 1 ? "" : "s"} ${unknown.map((n) => `{{${n}}}`).join(", ")}.`
+        );
+      }
 
       // Follow-ups always send to the parent's current contacts. This keeps
       // the recipient list authoritative on the root node and avoids the
@@ -133,7 +153,7 @@ export function useEmailSend({
             body: activeBatch.body,
             signature,
             contacts: sendContacts,
-            scheduledAt: effectiveScheduledAt,
+            scheduledAt: scheduledDate.toISOString(),
             ...(parentThreadIds && { parentThreadIds, parentMimeMessageIds }),
           }),
         });
@@ -147,6 +167,7 @@ export function useEmailSend({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            batchId: activeBatch.id,
             subject: activeBatch.subject,
             body: activeBatch.body,
             signature,
@@ -184,6 +205,7 @@ export function useEmailSend({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            batchId: activeBatch.id,
             subject: activeBatch.subject,
             body: activeBatch.body,
             signature,
