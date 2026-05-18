@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { createDraft, Contact } from "@/lib/gmail";
-import { validateContacts, hasCRLF } from "@/lib/validate";
+import { validateContacts, hasCRLF, validateTemplateTokens } from "@/lib/validate";
+import { requireUserId } from "@/lib/sync/auth-helper";
+import { listVariables } from "@/lib/sync/variables-repo";
+import { recordDraftsCreated } from "@/lib/sync/repo";
 
 export async function POST(request: Request) {
   try {
@@ -13,7 +16,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { subject, body: emailBody, signature, contacts } = body;
+    const { batchId, subject, body: emailBody, signature, contacts } = body;
 
     if (!subject || !emailBody || !contacts || !Array.isArray(contacts)) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
@@ -24,6 +27,13 @@ export async function POST(request: Request) {
     const contactError = validateContacts(contacts);
     if (contactError) {
       return NextResponse.json({ error: contactError }, { status: 400 });
+    }
+    const auth = await requireUserId();
+    if ("response" in auth) return auth.response;
+    const variables = await listVariables(auth.userId);
+    const templateError = validateTemplateTokens(subject, emailBody, variables);
+    if (templateError) {
+      return NextResponse.json({ error: templateError }, { status: 400 });
     }
 
     const results = [];
@@ -38,6 +48,15 @@ export async function POST(request: Request) {
         const errorMessage = err instanceof Error ? err.message : "Unknown error";
         console.error(`Error creating draft for ${contact.email}:`, err);
         errors.push({ email: contact.email, error: errorMessage });
+      }
+    }
+
+    // Persist batch.status='drafted' server-side so the client can't forge it.
+    if (batchId && results.length > 0) {
+      try {
+        await recordDraftsCreated(auth.userId, batchId);
+      } catch (persistErr) {
+        console.error("drafts/create: failed to persist status:", persistErr);
       }
     }
 

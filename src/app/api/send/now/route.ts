@@ -3,7 +3,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { sendMessage, sendReply, hasRecipientReplied } from "@/lib/gmail";
 import type { Contact } from "@/lib/gmail";
-import { validateContacts, hasCRLF } from "@/lib/validate";
+import { validateContacts, hasCRLF, validateTemplateTokens } from "@/lib/validate";
+import { requireUserId } from "@/lib/sync/auth-helper";
+import { listVariables } from "@/lib/sync/variables-repo";
+import { recordSendOutcome } from "@/lib/sync/repo";
 
 export async function POST(request: Request) {
   try {
@@ -15,6 +18,7 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const {
+      batchId,
       subject,
       body: emailBody,
       signature,
@@ -22,6 +26,7 @@ export async function POST(request: Request) {
       parentThreadIds,
       parentMimeMessageIds,
     }: {
+      batchId?: string;
       subject: string;
       body: string;
       signature?: string;
@@ -39,6 +44,13 @@ export async function POST(request: Request) {
     const contactError = validateContacts(contacts);
     if (contactError) {
       return NextResponse.json({ error: contactError }, { status: 400 });
+    }
+    const auth = await requireUserId();
+    if ("response" in auth) return auth.response;
+    const variables = await listVariables(auth.userId);
+    const templateError = validateTemplateTokens(subject, emailBody, variables);
+    if (templateError) {
+      return NextResponse.json({ error: templateError }, { status: 400 });
     }
     if (parentThreadIds) {
       for (const v of Object.values(parentThreadIds)) {
@@ -118,6 +130,19 @@ export async function POST(request: Request) {
           status: "failed",
           error: err instanceof Error ? err.message : "Unknown error",
         });
+      }
+    }
+
+    // Persist the outcome server-side. The client can no longer forge sent
+    // state via PATCH, so this is the authoritative write. Persistence is
+    // best-effort: we still return results to the client even if the DB
+    // update fails (the emails already went out — losing the audit record
+    // is recoverable, undoing a Gmail send is not).
+    if (batchId) {
+      try {
+        await recordSendOutcome(auth.userId, batchId, results);
+      } catch (persistErr) {
+        console.error("send/now: failed to persist outcome:", persistErr);
       }
     }
 

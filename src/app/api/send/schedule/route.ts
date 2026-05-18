@@ -4,7 +4,8 @@ import { authOptions } from "@/lib/auth";
 import { scheduleJob, listJobsForUser, cancelJob, cancelAllJobsForUser } from "@/lib/scheduler";
 import { resolveDbUser } from "@/lib/supabase/resolve-user";
 import type { Contact } from "@/lib/gmail";
-import { validateContacts, hasCRLF } from "@/lib/validate";
+import { validateContacts, hasCRLF, validateTemplateTokens } from "@/lib/validate";
+import { listVariables } from "@/lib/sync/variables-repo";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -27,9 +28,15 @@ export async function DELETE(request: Request) {
   try {
     const { userId } = await resolveDbUser({ email: session.user.email });
     const body = await request.json().catch(() => ({}));
-    const { id } = body as { id?: string };
+    const { id, cancelAll } = body as { id?: string; cancelAll?: boolean };
 
     if (!id) {
+      // Cancel-all is a destructive operation and used to be the default when
+      // no id was sent. Require an explicit opt-in so a missing/empty id from
+      // a buggy client cannot wipe every pending job.
+      if (cancelAll !== true) {
+        return NextResponse.json({ error: "id is required" }, { status: 400 });
+      }
       const count = await cancelAllJobsForUser(userId);
       return NextResponse.json({ ok: true, count });
     }
@@ -106,6 +113,12 @@ export async function POST(request: Request) {
 
     if (!googleAccountId) {
       return NextResponse.json({ error: "No Google account found for user" }, { status: 400 });
+    }
+
+    const variables = await listVariables(userId);
+    const templateError = validateTemplateTokens(subject, emailBody, variables);
+    if (templateError) {
+      return NextResponse.json({ error: templateError }, { status: 400 });
     }
 
     let parentThreads: Record<string, { threadId: string; mimeMessageId: string }> | undefined;
