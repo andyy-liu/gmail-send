@@ -86,11 +86,10 @@ function pad2(value: number) {
 }
 
 function parseLocalDateTime(value: string) {
-  const [datePart, timePart = "09:00"] = value.split("T");
-  const [year, month, day] = datePart.split("-").map(Number);
-  if (!year || !month || !day) return null;
-  const [hour = 9, minute = 0] = timePart.split(":").map(Number);
-  return new Date(year, month - 1, day, hour, minute);
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
 }
 
 function toLocalDateTimeValue(date: Date) {
@@ -106,10 +105,6 @@ function mergeDateAndTime(date: Date, time: string) {
 
 function startOfLocalDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function addDays(date: Date, days: number) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 }
 
 function laterDate(a: Date, b: Date) {
@@ -247,9 +242,16 @@ export function NodeDrawer({
   const today = startOfLocalDay(new Date());
   const parentTime = parent?.sentAt ?? parent?.scheduledAt;
   const parentMinDate = parentTime
-    ? addDays(startOfLocalDay(new Date(parentTime)), 1)
+    ? startOfLocalDay(new Date(parentTime))
     : today;
   const minScheduleDate = isFollowUp ? laterDate(today, parentMinDate) : today;
+  const followUpBeforeParent =
+    isFollowUp &&
+    !!scheduledAt &&
+    !!parentTime &&
+    new Date(scheduledAt).getTime() <= new Date(parentTime).getTime();
+  const scheduledInPast =
+    !!scheduledAt && new Date(scheduledAt).getTime() <= Date.now();
 
   // Recipients shown for this node. Follow-ups inherit from parent's current
   // contacts so the recipient list always lives on the root node and stays
@@ -468,6 +470,17 @@ export function NodeDrawer({
                           The previous email must be scheduled first. This
                           follow-up stays draft until you click Schedule Send.
                         </p>
+                        {scheduledInPast && (
+                          <p className="text-[11px] font-medium text-red-600">
+                            Send time must be in the future.
+                          </p>
+                        )}
+                        {followUpBeforeParent && parentTime && (
+                          <p className="text-[11px] font-medium text-amber-600">
+                            Follow-up must be after{" "}
+                            {new Date(parentTime).toLocaleString()}.
+                          </p>
+                        )}
                         {scheduledAtFallsOnWeekend && (
                           <p className="text-[11px] font-medium text-amber-600">
                             This send time falls on a weekend.
@@ -484,6 +497,11 @@ export function NodeDrawer({
                         <p className="text-[11px] text-neutral-400">
                           Edits apply when you reschedule.
                         </p>
+                        {scheduledInPast && (
+                          <p className="text-[11px] font-medium text-red-600">
+                            Send time must be in the future.
+                          </p>
+                        )}
                       </>
                     ) : (
                       <>
@@ -525,6 +543,11 @@ export function NodeDrawer({
                             }
                             minDate={minScheduleDate}
                           />
+                        )}
+                        {scheduledAt && scheduledInPast && (
+                          <p className="text-[11px] font-medium text-red-600">
+                            Send time must be in the future.
+                          </p>
                         )}
                       </>
                     )}
@@ -619,7 +642,13 @@ export function NodeDrawer({
 
             <Button
               onClick={handleActionClick}
-              disabled={isSubmitting || !batch || (isFollowUp && !scheduledAt)}
+              disabled={
+                isSubmitting ||
+                !batch ||
+                (isFollowUp && !scheduledAt) ||
+                followUpBeforeParent ||
+                scheduledInPast
+              }
               className="bg-neutral-900 text-white hover:bg-neutral-700 active:scale-[0.97] transition-transform w-full"
             >
               {isSubmitting ? (
