@@ -45,12 +45,13 @@ function SequenceStartNode() {
 // ─── Email node ──────────────────────────────────────────────────────────────
 type EmailNodeData = {
   batch: Batch;
+  recipientCount: number;
   isSelected: boolean;
   onDelete: (id: string) => void;
 };
 
 function EmailNodeComponent({ data }: NodeProps) {
-  const { batch, isSelected, onDelete } = data as EmailNodeData;
+  const { batch, recipientCount, isSelected, onDelete } = data as EmailNodeData;
   const [hovered, setHovered] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -95,8 +96,6 @@ function EmailNodeComponent({ data }: NodeProps) {
         : "",
     [batch.body]
   );
-
-  const recipientCount = batch.contacts.filter((c) => c.email).length;
 
   return (
     <div
@@ -229,12 +228,19 @@ export function WorkflowCanvas({
     y += SEQ_H + GAP;
 
     chain.forEach((batch, i) => {
+      const parent = batch.parentBatchId
+        ? chain.find((b) => b.id === batch.parentBatchId)
+        : undefined;
+      const effectiveContacts = parent ? parent.contacts : batch.contacts;
+      const recipientCount = (effectiveContacts ?? []).filter((c) => c.email).length;
+
       nodes.push({
         id: batch.id,
         type: "emailNode",
         position: { x: 0, y },
         data: {
           batch,
+          recipientCount,
           isSelected: batch.id === selectedNodeId,
           onDelete: onDeleteNode,
         },
