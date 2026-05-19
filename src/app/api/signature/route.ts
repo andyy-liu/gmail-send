@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/sync/auth-helper";
 import { setSignature } from "@/lib/sync/repo";
 
-const MAX_SIGNATURE_LEN = 50_000;
+// Headroom for embedded base64 images (a 4MB image is ~5.3MB base64).
+const MAX_SIGNATURE_LEN = 8_000_000;
 
 export async function PUT(request: Request) {
   try {

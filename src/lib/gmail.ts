@@ -82,6 +82,36 @@ async function getDeliveredMessageId(
   }
 }
 
+interface InlineImage {
+  cid: string;
+  contentType: string;
+  base64: string;
+}
+
+/**
+ * Find <img src="data:image/...;base64,..."> occurrences, replace each with a
+ * cid: reference, and return the rewritten HTML alongside the extracted images.
+ * The MIME builder then attaches the images as inline parts in multipart/related,
+ * which is what Gmail/Outlook/Apple Mail use to render inline images reliably.
+ */
+function extractInlineImages(html: string): { html: string; images: InlineImage[] } {
+  const images: InlineImage[] = [];
+  const rewritten = html.replace(
+    /src=(["'])data:(image\/[a-zA-Z0-9.+-]+);base64,([^"']+)\1/g,
+    (_match, quote: string, contentType: string, base64: string) => {
+      const cid = `img-${crypto.randomUUID()}@gmailsend`;
+      images.push({ cid, contentType, base64 });
+      return `src=${quote}cid:${cid}${quote}`;
+    }
+  );
+  return { html: rewritten, images };
+}
+
+/** Split base64 into 76-char lines as required by RFC 2045 for MIME bodies. */
+function chunkBase64(b64: string): string {
+  return b64.replace(/(.{76})/g, "$1\r\n");
+}
+
 function createMimeMessage(
   to: string,
   subject: string,
@@ -91,12 +121,14 @@ function createMimeMessage(
   fromName?: string,
   fromEmail?: string
 ): string {
+  const { html: rewrittenBody, images } = extractInlineImages(cleanListHtml(htmlBody));
+
   const wrappedHtml = [
     `<!DOCTYPE html>`,
     `<html>`,
     `<head><meta charset="UTF-8"></head>`,
     `<body>`,
-    cleanListHtml(htmlBody),
+    rewrittenBody,
     `</body></html>`,
   ].join("\n");
 
@@ -107,18 +139,54 @@ function createMimeMessage(
     ? `From: =?UTF-8?B?${Buffer.from(sanitizeHeader(fromName)).toString("base64")}?= <${safeFrom}>`
     : `From: ${safeFrom}`;
 
-  const message = [
+  const commonHeaders = [
     fromHeader,
     `To: ${safeTo}`,
     `Subject: =?UTF-8?B?${Buffer.from(safeSubject).toString("base64")}?=`,
     `Message-ID: ${mimeMessageId}`,
     ...extraHeaders,
     `MIME-Version: 1.0`,
-    `Content-Type: text/html; charset=UTF-8`,
-    `Content-Transfer-Encoding: base64`,
-    ``,
-    Buffer.from(wrappedHtml, "utf-8").toString("base64"),
-  ].join("\r\n");
+  ];
+
+  let message: string;
+  if (images.length === 0) {
+    message = [
+      ...commonHeaders,
+      `Content-Type: text/html; charset=UTF-8`,
+      `Content-Transfer-Encoding: base64`,
+      ``,
+      chunkBase64(Buffer.from(wrappedHtml, "utf-8").toString("base64")),
+    ].join("\r\n");
+  } else {
+    const boundary = `=_boundary_${crypto.randomUUID()}`;
+    const parts: string[] = [
+      `--${boundary}`,
+      `Content-Type: text/html; charset=UTF-8`,
+      `Content-Transfer-Encoding: base64`,
+      ``,
+      chunkBase64(Buffer.from(wrappedHtml, "utf-8").toString("base64")),
+    ];
+    for (const img of images) {
+      const filenameExt = img.contentType.split("/")[1]?.split("+")[0] ?? "img";
+      parts.push(
+        `--${boundary}`,
+        `Content-Type: ${img.contentType}`,
+        `Content-Transfer-Encoding: base64`,
+        `Content-ID: <${img.cid}>`,
+        `Content-Disposition: inline; filename="image.${filenameExt}"`,
+        ``,
+        chunkBase64(img.base64.replace(/\s+/g, ""))
+      );
+    }
+    parts.push(`--${boundary}--`, ``);
+
+    message = [
+      ...commonHeaders,
+      `Content-Type: multipart/related; boundary="${boundary}"; type="text/html"`,
+      ``,
+      parts.join("\r\n"),
+    ].join("\r\n");
+  }
 
   // base64url encode the entire MIME message
   return Buffer.from(message)
