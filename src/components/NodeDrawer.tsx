@@ -19,6 +19,8 @@ import {
   CheckCircle2,
   Clock,
   CalendarIcon,
+  RefreshCw,
+  MailMinus,
 } from "lucide-react";
 import { Batch, RecipientResult, RecipientResultStatus } from "@/lib/batches";
 import type { CustomVariable } from "@/lib/variables";
@@ -40,6 +42,8 @@ interface NodeDrawerProps {
   signature: string;
   variables: CustomVariable[];
   onUpdate: (patch: Partial<Batch>) => void;
+  /** Update any batch by id — used to write reply-check results back to the parent. */
+  onUpdateBatch: (id: string, patch: Partial<Batch>) => void;
   onClose: () => void;
 }
 
@@ -180,6 +184,50 @@ function DateTimePicker({
   );
 }
 
+/**
+ * Reply state lives on the root batch (all emails in a chain share one Gmail
+ * thread). For a follow-up tab we overlay the root's replied/skipped_replied
+ * onto the follow-up's own results so the user sees the same "stopped" markers
+ * regardless of which node is selected.
+ */
+function mergeWithParentReplies(
+  ownResults: RecipientResult[] | undefined,
+  parentResults: RecipientResult[] | undefined
+): RecipientResult[] | undefined {
+  if (!parentResults?.length) return ownResults;
+  const stoppedByEmail = new Map<string, RecipientResult>();
+  for (const pr of parentResults) {
+    if (pr.status === "replied" || pr.status === "skipped_replied") {
+      stoppedByEmail.set(pr.email.toLowerCase().trim(), pr);
+    }
+  }
+  if (stoppedByEmail.size === 0) return ownResults;
+
+  const own = ownResults ?? [];
+  const ownByEmail = new Map(own.map((r) => [r.email.toLowerCase().trim(), r]));
+  // Promote a `sent` row to `replied` when the shared thread shows a reply.
+  // Leave `failed` and existing stopped rows alone.
+  const merged: RecipientResult[] = own.map((r) => {
+    const key = r.email.toLowerCase().trim();
+    if (r.status === "sent" && stoppedByEmail.has(key)) {
+      return { ...r, status: "replied" as const };
+    }
+    return r;
+  });
+  // Add parent-side stopped recipients we don't have our own row for (typical
+  // for an unsent follow-up: own is empty, surface parent's state here).
+  for (const [key, pr] of stoppedByEmail) {
+    if (ownByEmail.has(key)) continue;
+    merged.push({
+      email: pr.email,
+      status: "skipped_replied",
+      threadId: pr.threadId,
+      mimeMessageId: pr.mimeMessageId,
+    });
+  }
+  return merged.length ? merged : undefined;
+}
+
 export function NodeDrawer({
   open,
   batch,
@@ -187,12 +235,16 @@ export function NodeDrawer({
   signature,
   variables,
   onUpdate,
+  onUpdateBatch,
   onClose,
 }: NodeDrawerProps) {
   const [sendMode, setSendMode] = useState<"draft" | "send">("draft");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("email");
+  const [checkingReplies, setCheckingReplies] = useState(false);
+  const lastCheckedRef = useRef<Map<string, number>>(new Map());
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
 
   const onDragStart = useCallback(
@@ -326,6 +378,53 @@ export function NodeDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, batch?.scheduledJobId, batch?.status]);
 
+  // ─── Reply detection ─────────────────────────────────────────────────────
+  // All emails in a chain share one Gmail thread per recipient, so we always
+  // check against the root batch — it's the single source of truth.
+  const rootBatch = (() => {
+    let cur = batch;
+    while (cur?.parentBatchId) {
+      const p = batches.find((b) => b.id === cur!.parentBatchId);
+      if (!p) break;
+      cur = p;
+    }
+    return cur;
+  })();
+
+  const canCheckReplies =
+    !!rootBatch &&
+    rootBatch.status === "sent" &&
+    !!rootBatch.recipientResults?.some((r) => r.status === "sent" && r.threadId);
+
+  async function runReplyCheck(force = false) {
+    if (!rootBatch || !canCheckReplies) return;
+    const id = rootBatch.id;
+    const last = lastCheckedRef.current.get(id);
+    if (!force && last && Date.now() - last < 10_000) return;
+
+    setCheckingReplies(true);
+    lastCheckedRef.current.set(id, Date.now());
+    try {
+      const res = await fetch(`/api/batches/${id}/check-replies`, { method: "POST" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { results: RecipientResult[]; replied: string[] };
+      onUpdateBatch(id, { recipientResults: data.results });
+    } catch {
+      // transient — user can hit refresh
+    } finally {
+      setCheckingReplies(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeTab !== "recipients") return;
+    void runReplyCheck();
+    // runReplyCheck reads from refs / latest batch state; firing only on the
+    // identity inputs avoids re-running on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, activeTab, rootBatch?.id, canCheckReplies]);
+
   // ─── Action / button labels ──────────────────────────────────────────────
   const actionLabel = isScheduled
     ? "Reschedule"
@@ -419,7 +518,8 @@ export function NodeDrawer({
         </div>
 
         <Tabs
-          defaultValue="email"
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as string)}
           className="flex-1 flex flex-col overflow-hidden"
         >
           <div className="px-6 pt-4 shrink-0">
@@ -592,18 +692,66 @@ export function NodeDrawer({
                     as variables in your email.
                   </p>
                 )}
-                <ContactTable
-                  contacts={displayedContacts}
-                  setContacts={(v) => onUpdate({ contacts: v })}
-                  readOnly={locked || isFollowUp}
-                  readOnlyNotice={
-                    isFollowUp
-                      ? "Recipients are inherited from the previous email and edited there."
-                      : undefined
-                  }
-                  recipientResults={batch.recipientResults}
-                  variables={variables}
-                />
+                {(() => {
+                  const parent = isFollowUp
+                    ? batches.find((b) => b.id === batch.parentBatchId)
+                    : undefined;
+                  const displayResults = mergeWithParentReplies(
+                    batch.recipientResults,
+                    parent?.recipientResults,
+                  );
+                  const stoppedCount = (displayResults ?? []).filter(
+                    (r) => r.status === "replied" || r.status === "skipped_replied",
+                  ).length;
+                  return (
+                    <>
+                      {canCheckReplies && (
+                        <div className="flex items-center justify-between mb-3 text-xs">
+                          <div className="flex items-center gap-2 text-neutral-500">
+                            {checkingReplies ? (
+                              <>
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                <span>Checking for replies…</span>
+                              </>
+                            ) : stoppedCount > 0 ? (
+                              <>
+                                <MailMinus className="h-3 w-3 text-amber-600" />
+                                <span>
+                                  {stoppedCount} recipient
+                                  {stoppedCount === 1 ? " has" : "s have"} replied —
+                                  sequence stopped for {stoppedCount === 1 ? "them" : "those contacts"}.
+                                </span>
+                              </>
+                            ) : (
+                              <span>No replies detected.</span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => void runReplyCheck(true)}
+                            disabled={checkingReplies}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-neutral-100 text-neutral-500 hover:text-neutral-700 disabled:opacity-50 cursor-pointer"
+                            title="Check for replies now"
+                          >
+                            <RefreshCw className={cn("h-3 w-3", checkingReplies && "animate-spin")} />
+                            Refresh
+                          </button>
+                        </div>
+                      )}
+                      <ContactTable
+                        contacts={displayedContacts}
+                        setContacts={(v) => onUpdate({ contacts: v })}
+                        readOnly={locked || isFollowUp}
+                        readOnlyNotice={
+                          isFollowUp
+                            ? "Recipients are inherited from the previous email and edited there."
+                            : undefined
+                        }
+                        recipientResults={displayResults}
+                        variables={variables}
+                      />
+                    </>
+                  );
+                })()}
               </>
             )}
           </TabsContent>

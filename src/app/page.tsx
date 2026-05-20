@@ -8,6 +8,7 @@ import { WorkflowCanvas } from "@/components/WorkflowCanvas";
 import { NodeDrawer } from "@/components/NodeDrawer";
 import { SignatureDialog } from "@/components/SignatureDialog";
 import { VariablesDialog } from "@/components/VariablesDialog";
+import { NotificationsDialog } from "@/components/NotificationsDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
@@ -17,6 +18,7 @@ export default function Home() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [sigDialogOpen, setSigDialogOpen] = useState(false);
   const [varsDialogOpen, setVarsDialogOpen] = useState(false);
+  const [notifsDialogOpen, setNotifsDialogOpen] = useState(false);
 
   const {
     batches,
@@ -95,6 +97,7 @@ export default function Home() {
         onDelete={handleDeleteCampaign}
         onSignature={() => setSigDialogOpen(true)}
         onVariables={() => setVarsDialogOpen(true)}
+        onNotifications={() => setNotifsDialogOpen(true)}
         session={session}
       />
 
@@ -127,6 +130,7 @@ export default function Home() {
         signature={signature}
         variables={variables}
         onUpdate={(patch) => selectedNodeId && updateBatch(selectedNodeId, patch)}
+        onUpdateBatch={updateBatch}
         onClose={() => setSelectedNodeId(null)}
       />
 
@@ -146,6 +150,12 @@ export default function Home() {
         onRename={renameVariable}
         onToggleEnabled={setVariableEnabled}
         onDelete={deleteVariable}
+      />
+
+      <NotificationsDialog
+        open={notifsDialogOpen}
+        onOpenChange={setNotifsDialogOpen}
+        batches={batches}
       />
     </div>
   );

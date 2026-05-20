@@ -535,6 +535,46 @@ export async function recordSendOutcome(
 }
 
 /**
+ * Mark the given recipients as `replied` on this batch. Reads the current
+ * recipient_results, flips matching emails from `sent` → `replied`, and writes
+ * it back. Returns the updated results. Other rows (failed / already-replied /
+ * skipped_replied) are left as-is.
+ */
+export async function markRecipientsReplied(
+  userId: string,
+  batchId: string,
+  repliedEmails: string[]
+): Promise<RecipientResult[]> {
+  const db = createAdminClient();
+  const { data: row, error: loadErr } = await db
+    .from("batches")
+    .select("recipient_results")
+    .eq("id", batchId)
+    .eq("user_id", userId)
+    .single();
+  if (loadErr) throw loadErr;
+
+  const current = Array.isArray(row?.recipient_results)
+    ? (row.recipient_results as RecipientResult[])
+    : [];
+  const repliedSet = new Set(repliedEmails.map((e) => e.toLowerCase().trim()));
+  const updated = current.map((r) =>
+    r.status === "sent" && repliedSet.has(r.email.toLowerCase().trim())
+      ? { ...r, status: "replied" as const }
+      : r
+  );
+
+  const { error: writeErr } = await db
+    .from("batches")
+    .update({ recipient_results: updated })
+    .eq("id", batchId)
+    .eq("user_id", userId);
+  if (writeErr) throw writeErr;
+
+  return updated;
+}
+
+/**
  * Persist that drafts were created for this batch. Status only — drafts have
  * no thread/message IDs we can use for reply threading later.
  */

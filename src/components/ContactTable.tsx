@@ -110,10 +110,14 @@ function StatusBadge({ result }: { result: RecipientResult | undefined }) {
       </span>
     );
   }
-  if (result.status === "skipped_replied") {
+  if (result.status === "replied" || result.status === "skipped_replied") {
+    const tooltip =
+      result.status === "replied"
+        ? "Recipient replied — sequence stopped."
+        : result.error || "Skipped — recipient already replied.";
     return (
       <span
-        title={result.error || "Skipped — recipient replied to the thread."}
+        title={tooltip}
         className="inline-flex items-center text-amber-600"
       >
         <MailMinus className="h-4 w-4" />

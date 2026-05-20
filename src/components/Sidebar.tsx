@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Batch } from "@/lib/batches";
 import { Session } from "next-auth";
 import { signOut } from "next-auth/react";
-import { Plus, ChevronLeft, ChevronRight, MoreHorizontal, PenLine, LogOut, Braces } from "lucide-react";
+import { Plus, ChevronLeft, ChevronRight, MoreHorizontal, PenLine, LogOut, Braces, Bell } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +23,7 @@ interface SidebarProps {
   onDelete: (id: string) => void;
   onSignature: () => void;
   onVariables: () => void;
+  onNotifications: () => void;
   session: Session;
 }
 
@@ -36,6 +37,7 @@ export function Sidebar({
   onDelete,
   onSignature,
   onVariables,
+  onNotifications,
   session,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -160,6 +162,13 @@ export function Sidebar({
 
           {/* Footer */}
           <div className="border-t border-neutral-200 p-2 space-y-0.5">
+            <button
+              onClick={onNotifications}
+              className="flex items-center gap-2 w-full px-2 py-1.5 text-xs text-neutral-500 hover:text-neutral-800 hover:bg-neutral-50 rounded transition-colors"
+            >
+              <Bell className="h-3.5 w-3.5 shrink-0" />
+              Notifications
+            </button>
             <button
               onClick={onVariables}
               className="flex items-center gap-2 w-full px-2 py-1.5 text-xs text-neutral-500 hover:text-neutral-800 hover:bg-neutral-50 rounded transition-colors"

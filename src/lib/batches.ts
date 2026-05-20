@@ -5,7 +5,13 @@ export interface ContactRow extends Contact {
   customFields: Record<string, string>;
 }
 
-export type RecipientResultStatus = "sent" | "failed" | "skipped_replied";
+/**
+ * - sent: delivered successfully
+ * - failed: send attempt failed
+ * - skipped_replied: didn't send this (follow-up) because recipient had already replied
+ * - replied: we sent it AND they replied — sequence is stopped from here on
+ */
+export type RecipientResultStatus = "sent" | "failed" | "skipped_replied" | "replied";
 
 export interface RecipientResult {
   email: string;
