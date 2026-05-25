@@ -6,7 +6,7 @@ import type { Contact } from "@/lib/gmail";
 import { validateContacts, hasCRLF, validateTemplateTokens } from "@/lib/validate";
 import { requireUserId } from "@/lib/sync/auth-helper";
 import { listVariables } from "@/lib/sync/variables-repo";
-import { recordSendOutcome } from "@/lib/sync/repo";
+import { filterStoppedContactsForBatch, recordSendOutcome } from "@/lib/sync/repo";
 
 export async function POST(request: Request) {
   try {
@@ -65,15 +65,25 @@ export async function POST(request: Request) {
 
     type Result = {
       email: string;
-      status: "sent" | "failed" | "skipped_replied";
+      status: "sent" | "failed" | "skipped_replied" | "manually_stopped";
       messageId?: string;
       threadId?: string;
       mimeMessageId?: string;
       error?: string;
     };
-    const results: Result[] = [];
+    const {
+      eligibleContacts,
+      stoppedContacts,
+    } = batchId
+      ? await filterStoppedContactsForBatch(auth.userId, batchId, contacts)
+      : { eligibleContacts: contacts, stoppedContacts: [] };
+    const results: Result[] = stoppedContacts.map((contact) => ({
+      email: contact.email,
+      status: "manually_stopped",
+      error: "Sequence manually stopped.",
+    }));
 
-    for (const contact of contacts) {
+    for (const contact of eligibleContacts) {
       const threadId = parentThreadIds?.[contact.email];
       const mimeMessageId = parentMimeMessageIds?.[contact.email];
       const fromName = session.user?.name ?? undefined;

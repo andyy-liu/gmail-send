@@ -6,6 +6,7 @@ import { resolveDbUser } from "@/lib/supabase/resolve-user";
 import type { Contact } from "@/lib/gmail";
 import { validateContacts, hasCRLF, validateTemplateTokens } from "@/lib/validate";
 import { listVariables } from "@/lib/sync/variables-repo";
+import { filterStoppedContactsForBatch } from "@/lib/sync/repo";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -120,6 +121,13 @@ export async function POST(request: Request) {
     if (templateError) {
       return NextResponse.json({ error: templateError }, { status: 400 });
     }
+    const { eligibleContacts } = await filterStoppedContactsForBatch(userId, batchId, contacts);
+    if (eligibleContacts.length === 0) {
+      return NextResponse.json(
+        { error: "All recipients are stopped for this sequence." },
+        { status: 400 }
+      );
+    }
 
     let parentThreads: Record<string, { threadId: string; mimeMessageId: string }> | undefined;
     if (parentThreadIds && parentMimeMessageIds) {
@@ -140,12 +148,12 @@ export async function POST(request: Request) {
       subject,
       body: emailBody,
       signature: signature || "",
-      contacts,
+      contacts: eligibleContacts,
       scheduledAt: scheduledDate.toISOString(),
       parentThreads,
     });
 
-    return NextResponse.json({ jobId, scheduledAt: scheduledDate.toISOString(), count: contacts.length });
+    return NextResponse.json({ jobId, scheduledAt: scheduledDate.toISOString(), count: eligibleContacts.length });
   } catch (err: unknown) {
     console.error("Error scheduling send:", err);
     const message = err instanceof Error ? err.message : "Internal Server Error";

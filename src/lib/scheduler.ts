@@ -44,6 +44,30 @@ function batchTime(row: { sent_at: string | null; scheduled_at: string | null })
   return row.sent_at ?? row.scheduled_at;
 }
 
+async function isManuallyStoppedInCampaign(
+  db: ReturnType<typeof createAdminClient>,
+  userId: string,
+  campaignId: string,
+  email: string
+): Promise<boolean> {
+  const { data, error } = await db
+    .from("batches")
+    .select("recipient_results")
+    .eq("campaign_id", campaignId)
+    .eq("user_id", userId);
+  if (error) throw error;
+
+  const key = email.toLowerCase().trim();
+  return (data ?? []).some((batch) => {
+    const results = Array.isArray(batch.recipient_results)
+      ? (batch.recipient_results as ParentRecipientResult[])
+      : [];
+    return results.some(
+      (r) => r.status === "manually_stopped" && r.email.toLowerCase().trim() === key
+    );
+  });
+}
+
 /**
  * Schedule a send for an existing editor batch. Snapshots the current
  * subject/body/signature onto the batch row so processDueJobs sees a stable
@@ -527,6 +551,31 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
             }
             continue;
           }
+        }
+
+        if (
+          batch?.campaign_id &&
+          await isManuallyStoppedInCampaign(
+            db,
+            job.user_id,
+            batch.campaign_id,
+            recipient.email
+          )
+        ) {
+          const { error: manualStopError } = await db
+            .from("send_recipients")
+            .update({
+              status: "manually_stopped",
+              last_error: "Sequence manually stopped.",
+              last_error_at: new Date().toISOString(),
+              gmail_thread_id: parentThreadId ?? null,
+              gmail_mime_message_id: parentMimeMessageId ?? null,
+            })
+            .eq("id", recipient.id);
+          if (manualStopError) {
+            errors.push(`${contact.email}: manual stop update failed: ${manualStopError.message}`);
+          }
+          continue;
         }
 
         try {

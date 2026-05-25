@@ -548,7 +548,7 @@ export async function markRecipientsReplied(
   const db = createAdminClient();
   const { data: row, error: loadErr } = await db
     .from("batches")
-    .select("recipient_results")
+    .select("campaign_id, recipient_results")
     .eq("id", batchId)
     .eq("user_id", userId)
     .single();
@@ -570,6 +570,44 @@ export async function markRecipientsReplied(
     .eq("id", batchId)
     .eq("user_id", userId);
   if (writeErr) throw writeErr;
+
+  const { data: batchRows, error: batchesErr } = await db
+    .from("batches")
+    .select("id")
+    .eq("campaign_id", row.campaign_id)
+    .eq("user_id", userId);
+  if (batchesErr) throw batchesErr;
+
+  const batchIds = (batchRows ?? []).map((b: { id: string }) => b.id);
+  const { data: jobs, error: jobsErr } = await db
+    .from("send_jobs")
+    .select("id")
+    .eq("user_id", userId)
+    .in("batch_id", batchIds)
+    .in("status", ["pending", "partial_failed", "running"]);
+  if (jobsErr) throw jobsErr;
+
+  const jobIds = (jobs ?? []).map((j: { id: string }) => j.id);
+  if (jobIds.length) {
+    for (const result of updated) {
+      if (result.status !== "replied" || !repliedSet.has(recipientKey(result.email))) {
+        continue;
+      }
+      const { error: recipientsErr } = await db
+        .from("send_recipients")
+        .update({
+          status: "skipped_replied",
+          last_error: "Recipient already replied to the thread.",
+          last_error_at: new Date().toISOString(),
+          gmail_thread_id: result.threadId ?? null,
+          gmail_mime_message_id: result.mimeMessageId ?? null,
+        })
+        .in("job_id", jobIds)
+        .eq("email", recipientKey(result.email))
+        .eq("status", "pending");
+      if (recipientsErr) throw recipientsErr;
+    }
+  }
 
   return updated;
 }
@@ -690,6 +728,65 @@ export async function stopRecipientSequence(
   }
 
   return updated;
+}
+
+function isStoppedStatus(status: RecipientResult["status"]) {
+  return (
+    status === "replied" ||
+    status === "skipped_replied" ||
+    status === "manually_stopped"
+  );
+}
+
+/**
+ * Server-side guard for send endpoints. The UI also filters stopped contacts,
+ * but the server must not trust a stale browser payload for this.
+ */
+export async function filterStoppedContactsForBatch<T extends { email: string }>(
+  userId: string,
+  batchId: string,
+  contacts: T[]
+): Promise<{ eligibleContacts: T[]; stoppedContacts: T[] }> {
+  const db = createAdminClient();
+
+  const { data: target, error: targetErr } = await db
+    .from("batches")
+    .select("campaign_id")
+    .eq("id", batchId)
+    .eq("user_id", userId)
+    .single();
+  if (targetErr || !target) throw targetErr ?? new Error("Batch not found");
+
+  const { data: batchRows, error: batchesErr } = await db
+    .from("batches")
+    .select("recipient_results")
+    .eq("campaign_id", target.campaign_id)
+    .eq("user_id", userId);
+  if (batchesErr) throw batchesErr;
+
+  const stoppedEmails = new Set<string>();
+  for (const batch of batchRows ?? []) {
+    const results = Array.isArray(batch.recipient_results)
+      ? (batch.recipient_results as RecipientResult[])
+      : [];
+    for (const result of results) {
+      if (result.email && isStoppedStatus(result.status)) {
+        stoppedEmails.add(recipientKey(result.email));
+      }
+    }
+  }
+
+  const eligibleContacts: T[] = [];
+  const stoppedContacts: T[] = [];
+  for (const contact of contacts) {
+    if (stoppedEmails.has(recipientKey(contact.email))) {
+      stoppedContacts.push(contact);
+    } else {
+      eligibleContacts.push(contact);
+    }
+  }
+
+  return { eligibleContacts, stoppedContacts };
 }
 
 /**

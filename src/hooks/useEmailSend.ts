@@ -203,13 +203,16 @@ export function useEmailSend({
         const sentCount = results.filter((r) => r.status === "sent").length;
         const failedCount = results.filter((r) => r.status === "failed").length;
         const skippedCount = results.filter((r) => r.status === "skipped_replied").length;
+        const stoppedCount = results.filter((r) => r.status === "manually_stopped").length;
 
         if (failedCount > 0) {
           toast.error(
-            `Sent ${sentCount}, ${failedCount} failed${skippedCount ? `, ${skippedCount} skipped` : ""}.`
+            `Sent ${sentCount}, ${failedCount} failed${skippedCount ? `, ${skippedCount} skipped` : ""}${stoppedCount ? `, ${stoppedCount} stopped` : ""}.`
           );
         } else if (skippedCount > 0) {
-          toast.success(`Sent ${sentCount}, ${skippedCount} skipped (already replied).`);
+          toast.success(`Sent ${sentCount}, ${skippedCount} skipped (already replied)${stoppedCount ? `, ${stoppedCount} stopped` : ""}.`);
+        } else if (stoppedCount > 0) {
+          toast.success(`Sent ${sentCount}, ${stoppedCount} stopped.`);
         } else {
           toast.success(`Sent ${sentCount} email(s) successfully!`);
         }
