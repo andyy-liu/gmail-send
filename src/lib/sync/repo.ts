@@ -574,6 +574,124 @@ export async function markRecipientsReplied(
   return updated;
 }
 
+const MANUAL_STOP_ERROR = "Sequence manually stopped.";
+
+function recipientKey(email: string): string {
+  return email.toLowerCase().trim();
+}
+
+function collectDescendantBatchIds(
+  rootId: string,
+  batches: { id: string; parent_batch_id: string | null }[]
+): string[] {
+  const ids = new Set<string>();
+  const queue = [rootId];
+  while (queue.length) {
+    const id = queue.pop()!;
+    if (ids.has(id)) continue;
+    ids.add(id);
+    for (const batch of batches) {
+      if (batch.parent_batch_id === id) queue.push(batch.id);
+    }
+  }
+  return Array.from(ids);
+}
+
+/**
+ * Stop a recipient from receiving any later emails in this sequence. The root
+ * batch is the source of truth for per-recipient stop state, while pending
+ * scheduled recipient rows are flipped too so an already-created job won't
+ * send before the next UI sync.
+ */
+export async function stopRecipientSequence(
+  userId: string,
+  batchId: string,
+  email: string
+): Promise<RecipientResult[]> {
+  const normalizedEmail = recipientKey(email);
+  if (!normalizedEmail) throw new Error("Email is required");
+
+  const db = createAdminClient();
+
+  const { data: target, error: targetErr } = await db
+    .from("batches")
+    .select("id, campaign_id")
+    .eq("id", batchId)
+    .eq("user_id", userId)
+    .single();
+  if (targetErr || !target) throw targetErr ?? new Error("Batch not found");
+
+  const { data: batchRows, error: batchesErr } = await db
+    .from("batches")
+    .select("id, parent_batch_id, recipient_results")
+    .eq("campaign_id", target.campaign_id)
+    .eq("user_id", userId);
+  if (batchesErr) throw batchesErr;
+
+  const rows = (batchRows ?? []) as {
+    id: string;
+    parent_batch_id: string | null;
+    recipient_results: RecipientResult[] | null;
+  }[];
+  const byId = new Map(rows.map((b) => [b.id, b]));
+  let root = byId.get(target.id);
+  while (root?.parent_batch_id) {
+    const parent = byId.get(root.parent_batch_id);
+    if (!parent) break;
+    root = parent;
+  }
+  if (!root) throw new Error("Batch not found");
+
+  const current = Array.isArray(root.recipient_results)
+    ? root.recipient_results
+    : [];
+  const existing = current.find((r) => recipientKey(r.email) === normalizedEmail);
+  const stopped: RecipientResult = {
+    email: existing?.email || email,
+    status: "manually_stopped",
+    messageId: existing?.messageId,
+    threadId: existing?.threadId,
+    mimeMessageId: existing?.mimeMessageId,
+    error: MANUAL_STOP_ERROR,
+  };
+  const updated = existing
+    ? current.map((r) => (recipientKey(r.email) === normalizedEmail ? stopped : r))
+    : [...current, stopped];
+
+  const { error: writeErr } = await db
+    .from("batches")
+    .update({ recipient_results: updated })
+    .eq("id", root.id)
+    .eq("user_id", userId);
+  if (writeErr) throw writeErr;
+
+  const descendantIds = collectDescendantBatchIds(root.id, rows);
+  const { data: jobs, error: jobsErr } = await db
+    .from("send_jobs")
+    .select("id")
+    .eq("user_id", userId)
+    .in("batch_id", descendantIds)
+    .in("status", ["pending", "partial_failed", "running"]);
+  if (jobsErr) throw jobsErr;
+
+  const jobIds = (jobs ?? []).map((j: { id: string }) => j.id);
+  if (jobIds.length) {
+    const { error: recipientsErr } = await db
+      .from("send_recipients")
+      .update({
+        status: "manually_stopped",
+        last_error: MANUAL_STOP_ERROR,
+        last_error_at: new Date().toISOString(),
+      })
+      .in("job_id", jobIds)
+      .eq("email", normalizedEmail)
+      .eq("status", "pending");
+    if (recipientsErr) throw recipientsErr;
+  }
+
+  return updated;
+}
+
 /**
  * Persist that drafts were created for this batch. Status only — drafts have
  * no thread/message IDs we can use for reply threading later.

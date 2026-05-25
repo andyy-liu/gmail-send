@@ -31,6 +31,14 @@ function isWeekendDate(value: string) {
   return day === 0 || day === 6;
 }
 
+function isStoppedRecipient(r: RecipientResult | undefined) {
+  return (
+    r?.status === "replied" ||
+    r?.status === "skipped_replied" ||
+    r?.status === "manually_stopped"
+  );
+}
+
 export function useEmailSend({
   activeBatch,
   batches,
@@ -70,8 +78,21 @@ export function useEmailSend({
       const parent = activeBatch.parentBatchId
         ? batches.find((b) => b.id === activeBatch.parentBatchId)
         : undefined;
+      let rootBatch = activeBatch;
+      while (rootBatch.parentBatchId) {
+        const ancestor = batches.find((b) => b.id === rootBatch.parentBatchId);
+        if (!ancestor) break;
+        rootBatch = ancestor;
+      }
+      const stoppedEmails = new Set(
+        (rootBatch.recipientResults ?? [])
+          .filter(isStoppedRecipient)
+          .map((r) => r.email.toLowerCase().trim())
+      );
       const sendContacts = activeBatch.parentBatchId
-        ? parent?.contacts ?? []
+        ? (parent?.contacts ?? []).filter(
+            (c) => !stoppedEmails.has(c.email.toLowerCase().trim())
+          )
         : activeBatch.contacts;
 
       if (sendContacts.length === 0) throw new Error("At least one contact is required.");

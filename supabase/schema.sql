@@ -35,7 +35,8 @@ create type public.send_recipient_status as enum (
   'sent',
   'failed',
   'cancelled',
-  'skipped_replied'
+  'skipped_replied',
+  'manually_stopped'
 );
 
 create type public.send_job_kind as enum (

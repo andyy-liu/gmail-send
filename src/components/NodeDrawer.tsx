@@ -29,6 +29,7 @@ import { ContactTable } from "@/components/ContactTable";
 import { TemplateEditor } from "@/components/TemplateEditor";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 const DEFAULT_WIDTH = 520;
 const MIN_WIDTH = 340;
@@ -66,6 +67,7 @@ function recipientRowToResult(r: RecipientRow): RecipientResult | null {
   let status: RecipientResultStatus;
   if (r.status === "sent") status = "sent";
   else if (r.status === "skipped_replied") status = "skipped_replied";
+  else if (r.status === "manually_stopped") status = "manually_stopped";
   else if (r.status === "failed") status = "failed";
   else return null;
   return {
@@ -185,10 +187,10 @@ function DateTimePicker({
 }
 
 /**
- * Reply state lives on the root batch (all emails in a chain share one Gmail
- * thread). For a follow-up tab we overlay the root's replied/skipped_replied
- * onto the follow-up's own results so the user sees the same "stopped" markers
- * regardless of which node is selected.
+ * Stop state lives on the root batch (all emails in a chain share one Gmail
+ * thread). For a follow-up tab we overlay root-side stopped statuses onto the
+ * follow-up's own results so the user sees the same markers regardless of
+ * which node is selected.
  */
 function mergeWithParentReplies(
   ownResults: RecipientResult[] | undefined,
@@ -197,7 +199,11 @@ function mergeWithParentReplies(
   if (!parentResults?.length) return ownResults;
   const stoppedByEmail = new Map<string, RecipientResult>();
   for (const pr of parentResults) {
-    if (pr.status === "replied" || pr.status === "skipped_replied") {
+    if (
+      pr.status === "replied" ||
+      pr.status === "skipped_replied" ||
+      pr.status === "manually_stopped"
+    ) {
       stoppedByEmail.set(pr.email.toLowerCase().trim(), pr);
     }
   }
@@ -205,12 +211,22 @@ function mergeWithParentReplies(
 
   const own = ownResults ?? [];
   const ownByEmail = new Map(own.map((r) => [r.email.toLowerCase().trim(), r]));
-  // Promote a `sent` row to `replied` when the shared thread shows a reply.
-  // Leave `failed` and existing stopped rows alone.
+  // Promote rows when the shared sequence state shows this recipient is now
+  // stopped. Reply-derived stops only upgrade sent rows; manual stops can
+  // override other terminal states because the user is explicitly ending the
+  // sequence from this point forward.
   const merged: RecipientResult[] = own.map((r) => {
     const key = r.email.toLowerCase().trim();
-    if (r.status === "sent" && stoppedByEmail.has(key)) {
-      return { ...r, status: "replied" as const };
+    const stopped = stoppedByEmail.get(key);
+    if (stopped?.status === "manually_stopped" && !isStoppedResult(r)) {
+      return {
+        ...r,
+        status: "manually_stopped",
+        error: stopped.error,
+      };
+    }
+    if (r.status === "sent" && stopped) {
+      return { ...r, status: "replied" as const, error: stopped.error };
     }
     return r;
   });
@@ -220,12 +236,21 @@ function mergeWithParentReplies(
     if (ownByEmail.has(key)) continue;
     merged.push({
       email: pr.email,
-      status: "skipped_replied",
+      status: pr.status,
       threadId: pr.threadId,
       mimeMessageId: pr.mimeMessageId,
+      error: pr.error,
     });
   }
   return merged.length ? merged : undefined;
+}
+
+function isStoppedResult(r: RecipientResult) {
+  return (
+    r.status === "replied" ||
+    r.status === "skipped_replied" ||
+    r.status === "manually_stopped"
+  );
 }
 
 export function NodeDrawer({
@@ -244,6 +269,8 @@ export function NodeDrawer({
   const [isDragging, setIsDragging] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("email");
   const [checkingReplies, setCheckingReplies] = useState(false);
+  const [stopConfirmEmail, setStopConfirmEmail] = useState<string | null>(null);
+  const [stoppingEmail, setStoppingEmail] = useState<string | null>(null);
   const lastCheckedRef = useRef<Map<string, number>>(new Map());
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -413,6 +440,33 @@ export function NodeDrawer({
       // transient — user can hit refresh
     } finally {
       setCheckingReplies(false);
+    }
+  }
+
+  async function confirmStopSequence() {
+    if (!rootBatch || !stopConfirmEmail) return;
+    const email = stopConfirmEmail;
+    const normalized = email.toLowerCase().trim();
+    setStoppingEmail(normalized);
+    try {
+      const res = await fetch(`/api/batches/${rootBatch.id}/recipients/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        results?: RecipientResult[];
+        error?: string;
+      };
+      if (!res.ok || !data.results) {
+        throw new Error(data.error || "Failed to stop sequence.");
+      }
+      onUpdateBatch(rootBatch.id, { recipientResults: data.results });
+      toast.success(`Sequence stopped for ${email}.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to stop sequence.");
+    } finally {
+      setStoppingEmail(null);
     }
   }
 
@@ -693,16 +747,19 @@ export function NodeDrawer({
                   </p>
                 )}
                 {(() => {
-                  const parent = isFollowUp
-                    ? batches.find((b) => b.id === batch.parentBatchId)
-                    : undefined;
                   const displayResults = mergeWithParentReplies(
                     batch.recipientResults,
-                    parent?.recipientResults,
+                    isFollowUp ? rootBatch?.recipientResults : undefined,
                   );
                   const stoppedCount = (displayResults ?? []).filter(
-                    (r) => r.status === "replied" || r.status === "skipped_replied",
+                    isStoppedResult,
                   ).length;
+                  const manualStoppedCount = (displayResults ?? []).filter(
+                    (r) => r.status === "manually_stopped",
+                  ).length;
+                  const canStopRecipients =
+                    !!rootBatch &&
+                    (rootBatch.status === "sent" || rootBatch.status === "scheduled");
                   return (
                     <>
                       {canCheckReplies && (
@@ -718,8 +775,11 @@ export function NodeDrawer({
                                 <MailMinus className="h-3 w-3 text-amber-600" />
                                 <span>
                                   {stoppedCount} recipient
-                                  {stoppedCount === 1 ? " has" : "s have"} replied —
-                                  sequence stopped for {stoppedCount === 1 ? "them" : "those contacts"}.
+                                  {stoppedCount === 1 ? " is" : "s are"} stopped
+                                  {manualStoppedCount > 0
+                                    ? ` (${manualStoppedCount} manually)`
+                                    : ""}
+                                  .
                                 </span>
                               </>
                             ) : (
@@ -748,6 +808,12 @@ export function NodeDrawer({
                         }
                         recipientResults={displayResults}
                         variables={variables}
+                        onStopSequence={
+                          canStopRecipients
+                            ? (email) => setStopConfirmEmail(email)
+                            : undefined
+                        }
+                        stoppingEmail={stoppingEmail}
                       />
                     </>
                   );
@@ -878,6 +944,24 @@ export function NodeDrawer({
               </div>
             }
             onConfirm={() => submit(sendMode)}
+          />
+        )}
+        {rootBatch && (
+          <ConfirmDialog
+            open={!!stopConfirmEmail}
+            onOpenChange={(open) => {
+              if (!open) setStopConfirmEmail(null);
+            }}
+            title="Stop this sequence?"
+            confirmLabel="Stop Sequence"
+            confirmVariant="destructive"
+            description={
+              <p>
+                This prevents {stopConfirmEmail} from receiving future emails in
+                this sequence. Emails already sent cannot be recalled.
+              </p>
+            }
+            onConfirm={confirmStopSequence}
           />
         )}
       </SheetContent>

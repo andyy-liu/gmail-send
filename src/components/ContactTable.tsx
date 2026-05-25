@@ -17,6 +17,9 @@ interface ContactTableProps {
   readOnlyNotice?: string;
   /** Custom variables; enabled ones become columns. */
   variables?: CustomVariable[];
+  /** Optional per-row action for stopping a recipient's sequence. */
+  onStopSequence?: (email: string) => void;
+  stoppingEmail?: string | null;
 }
 
 function normalizeHeader(h: string): string {
@@ -110,11 +113,17 @@ function StatusBadge({ result }: { result: RecipientResult | undefined }) {
       </span>
     );
   }
-  if (result.status === "replied" || result.status === "skipped_replied") {
+  if (
+    result.status === "replied" ||
+    result.status === "skipped_replied" ||
+    result.status === "manually_stopped"
+  ) {
     const tooltip =
       result.status === "replied"
         ? "Recipient replied — sequence stopped."
-        : result.error || "Skipped — recipient already replied.";
+        : result.status === "manually_stopped"
+          ? "Sequence manually stopped."
+          : result.error || "Skipped — recipient already replied.";
     return (
       <span
         title={tooltip}
@@ -134,6 +143,14 @@ function StatusBadge({ result }: { result: RecipientResult | undefined }) {
   );
 }
 
+function isStopped(result: RecipientResult | undefined) {
+  return (
+    result?.status === "replied" ||
+    result?.status === "skipped_replied" ||
+    result?.status === "manually_stopped"
+  );
+}
+
 export function ContactTable({
   contacts,
   setContacts,
@@ -141,6 +158,8 @@ export function ContactTable({
   recipientResults,
   readOnlyNotice,
   variables,
+  onStopSequence,
+  stoppingEmail,
 }: ContactTableProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   // null = closed, number >= 0 = row index to delete, -1 = clear all
@@ -149,7 +168,7 @@ export function ContactTable({
   const resultByEmail = useMemo(() => {
     const map = new Map<string, RecipientResult>();
     for (const r of recipientResults ?? []) {
-      if (r.email) map.set(r.email.toLowerCase(), r);
+      if (r.email) map.set(r.email.toLowerCase().trim(), r);
     }
     return map;
   }, [recipientResults]);
@@ -160,6 +179,7 @@ export function ContactTable({
   );
 
   const showStatusColumn = !!recipientResults;
+  const showSequenceActions = !!onStopSequence;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -215,68 +235,94 @@ export function ContactTable({
               {enabledVariables.map((v) => (
                 <TableHead key={v.id}>{v.name}</TableHead>
               ))}
+              {showSequenceActions && <TableHead className="w-[88px] text-right">Sequence</TableHead>}
               {!readOnly && <TableHead className="w-[60px] text-right">Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {contacts.map((contact, i) => (
-              <TableRow key={contact.id}>
-                {showStatusColumn && (
-                  <TableCell className="pr-0">
-                    <StatusBadge result={resultByEmail.get(contact.email.toLowerCase())} />
-                  </TableCell>
-                )}
-                <TableCell>
-                  <Input
-                    placeholder="email@example.com"
-                    value={contact.email}
-                    onChange={(e) => updateContact(i, "email", e.target.value)}
-                    readOnly={readOnly}
-                    tabIndex={readOnly ? -1 : 0}
-                    className={inputClass}
-                  />
-                </TableCell>
-                <TableCell>
-                  <Input
-                    placeholder="First Name"
-                    value={contact.firstName}
-                    onChange={(e) => updateContact(i, "firstName", e.target.value)}
-                    readOnly={readOnly}
-                    tabIndex={readOnly ? -1 : 0}
-                    className={inputClass}
-                  />
-                </TableCell>
-                <TableCell>
-                  <Input
-                    placeholder="Company"
-                    value={contact.company}
-                    onChange={(e) => updateContact(i, "company", e.target.value)}
-                    readOnly={readOnly}
-                    tabIndex={readOnly ? -1 : 0}
-                    className={inputClass}
-                  />
-                </TableCell>
-                {enabledVariables.map((v) => (
-                  <TableCell key={v.id}>
+            {contacts.map((contact, i) => {
+              const result = resultByEmail.get(contact.email.toLowerCase().trim());
+              const stopped = isStopped(result);
+              const isStopping = stoppingEmail === contact.email.toLowerCase().trim();
+              return (
+                <TableRow key={contact.id}>
+                  {showStatusColumn && (
+                    <TableCell className="pr-0">
+                      <StatusBadge result={result} />
+                    </TableCell>
+                  )}
+                  <TableCell>
                     <Input
-                      placeholder={v.name}
-                      value={contact.customFields?.[v.name] ?? ""}
-                      onChange={(e) => updateCustomField(i, v.name, e.target.value)}
+                      placeholder="email@example.com"
+                      value={contact.email}
+                      onChange={(e) => updateContact(i, "email", e.target.value)}
                       readOnly={readOnly}
                       tabIndex={readOnly ? -1 : 0}
                       className={inputClass}
                     />
                   </TableCell>
-                ))}
-                {!readOnly && (
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" onClick={() => setConfirmTarget(i)} className="text-neutral-400 hover:text-red-500">
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                  <TableCell>
+                    <Input
+                      placeholder="First Name"
+                      value={contact.firstName}
+                      onChange={(e) => updateContact(i, "firstName", e.target.value)}
+                      readOnly={readOnly}
+                      tabIndex={readOnly ? -1 : 0}
+                      className={inputClass}
+                    />
                   </TableCell>
-                )}
-              </TableRow>
-            ))}
+                  <TableCell>
+                    <Input
+                      placeholder="Company"
+                      value={contact.company}
+                      onChange={(e) => updateContact(i, "company", e.target.value)}
+                      readOnly={readOnly}
+                      tabIndex={readOnly ? -1 : 0}
+                      className={inputClass}
+                    />
+                  </TableCell>
+                  {enabledVariables.map((v) => (
+                    <TableCell key={v.id}>
+                      <Input
+                        placeholder={v.name}
+                        value={contact.customFields?.[v.name] ?? ""}
+                        onChange={(e) => updateCustomField(i, v.name, e.target.value)}
+                        readOnly={readOnly}
+                        tabIndex={readOnly ? -1 : 0}
+                        className={inputClass}
+                      />
+                    </TableCell>
+                  ))}
+                  {showSequenceActions && (
+                    <TableCell className="text-right">
+                      {stopped ? (
+                        <span className="text-[11px] font-medium text-amber-700">
+                          Stopped
+                        </span>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onStopSequence?.(contact.email)}
+                          disabled={!contact.email.trim() || isStopping}
+                          className="h-7 px-2 text-xs text-neutral-500 hover:text-amber-700"
+                        >
+                          {isStopping ? "Stopping..." : "Stop"}
+                        </Button>
+                      )}
+                    </TableCell>
+                  )}
+                  {!readOnly && (
+                    <TableCell className="text-right">
+                      <Button variant="ghost" size="icon" onClick={() => setConfirmTarget(i)} className="text-neutral-400 hover:text-red-500">
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  )}
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
         {contacts.length === 0 && (

@@ -23,7 +23,13 @@ interface NotificationsDialogProps {
   batches: Batch[];
 }
 
-type EventStatus = "scheduled" | "sent" | "failed" | "replied" | "skipped_replied";
+type EventStatus =
+  | "scheduled"
+  | "sent"
+  | "failed"
+  | "replied"
+  | "skipped_replied"
+  | "manually_stopped";
 
 interface RecipientEvent {
   batchId: string;
@@ -73,18 +79,17 @@ function labelFor(index: number): string {
 
 function eventForRecipient(batch: Batch, email: string): RecipientEvent | null {
   const key = email.toLowerCase().trim();
-  if (batch.status === "scheduled") {
-    return { batchId: batch.id, batchLabel: "", status: "scheduled" };
-  }
-  if (batch.status === "sent") {
-    const r = batch.recipientResults?.find((x) => x.email.toLowerCase().trim() === key);
-    if (!r) return null;
+  const r = batch.recipientResults?.find((x) => x.email.toLowerCase().trim() === key);
+  if (r) {
     return {
       batchId: batch.id,
       batchLabel: "",
       status: r.status as EventStatus,
       detail: r.error,
     };
+  }
+  if (batch.status === "scheduled") {
+    return { batchId: batch.id, batchLabel: "", status: "scheduled" };
   }
   return null;
 }
@@ -121,7 +126,12 @@ function maxTimeForRecipient(_r: RecipientActivity, chain: ChainEntry[]): number
 }
 
 function eventIsDeviation(e: RecipientEvent): boolean {
-  return e.status === "failed" || e.status === "replied" || e.status === "skipped_replied";
+  return (
+    e.status === "failed" ||
+    e.status === "replied" ||
+    e.status === "skipped_replied" ||
+    e.status === "manually_stopped"
+  );
 }
 
 function StatusPill({ event }: { event: RecipientEvent }) {
@@ -159,6 +169,17 @@ function StatusPill({ event }: { event: RecipientEvent }) {
       <span className={cn(base, "border-amber-200 bg-amber-50 text-amber-700")}>
         <MailMinus className="h-3 w-3" />
         {event.batchLabel} · Replied — sequence stopped
+      </span>
+    );
+  }
+  if (event.status === "manually_stopped") {
+    return (
+      <span
+        className={cn(base, "border-amber-200 bg-amber-50 text-amber-700")}
+        title={event.detail || "Sequence manually stopped."}
+      >
+        <MailMinus className="h-3 w-3" />
+        {event.batchLabel} · Stopped manually
       </span>
     );
   }

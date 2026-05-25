@@ -10,8 +10,14 @@ export interface ContactRow extends Contact {
  * - failed: send attempt failed
  * - skipped_replied: didn't send this (follow-up) because recipient had already replied
  * - replied: we sent it AND they replied — sequence is stopped from here on
+ * - manually_stopped: user stopped this recipient's sequence
  */
-export type RecipientResultStatus = "sent" | "failed" | "skipped_replied" | "replied";
+export type RecipientResultStatus =
+  | "sent"
+  | "failed"
+  | "skipped_replied"
+  | "replied"
+  | "manually_stopped";
 
 export interface RecipientResult {
   email: string;
@@ -21,7 +27,7 @@ export interface RecipientResult {
   messageId?: string;
   threadId?: string;
   mimeMessageId?: string;
-  // Present for "failed" and "skipped_replied".
+  // Present for "failed", "skipped_replied", and "manually_stopped".
   error?: string;
 }
 

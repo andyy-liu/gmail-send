@@ -35,6 +35,7 @@ interface RecipientSnapshotRow {
 
 interface ParentRecipientResult {
   email: string;
+  status?: string;
   threadId?: string;
   mimeMessageId?: string;
 }
@@ -344,7 +345,7 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
       const { data: job, error: jobLoadError } = await db
         .from("send_jobs")
         .select(
-          "id, user_id, batch_id, batches!send_jobs_batch_id_fkey(subject, body_html, signature_html, parent_batch_id), google_accounts(refresh_token_ciphertext, refresh_token_iv, refresh_token_tag)"
+          "id, user_id, batch_id, batches!send_jobs_batch_id_fkey(subject, body_html, signature_html, parent_batch_id, campaign_id), google_accounts(refresh_token_ciphertext, refresh_token_iv, refresh_token_tag)"
         )
         .eq("id", jobId)
         .single();
@@ -367,12 +368,14 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
         body_html: string;
         signature_html: string;
         parent_batch_id: string | null;
+        campaign_id: string;
       } | null;
       const subject = batch?.subject ?? "";
       const body = batch?.body_html ?? "";
       const signature = batch?.signature_html || undefined;
       const parentBatchId = batch?.parent_batch_id ?? null;
       let parentResultsByEmail: Map<string, ParentRecipientResult> | null = null;
+      let manualStopsByEmail: Map<string, ParentRecipientResult> | null = null;
 
       if (parentBatchId) {
         const { data: parentBatch, error: parentBatchError } = await db
@@ -399,6 +402,23 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
           : [];
         parentResultsByEmail = new Map(
           parentResults.map((r) => [r.email.toLowerCase().trim(), r])
+        );
+
+        const { data: chainBatches, error: chainBatchesError } = await db
+          .from("batches")
+          .select("recipient_results")
+          .eq("campaign_id", batch?.campaign_id)
+          .eq("user_id", job.user_id);
+        if (chainBatchesError) throw chainBatchesError;
+        const manualStops = (chainBatches ?? []).flatMap((b) =>
+          Array.isArray(b.recipient_results)
+            ? (b.recipient_results as ParentRecipientResult[]).filter(
+                (r) => r.status === "manually_stopped"
+              )
+            : []
+        );
+        manualStopsByEmail = new Map(
+          manualStops.map((r) => [r.email.toLowerCase().trim(), r])
         );
       }
 
@@ -436,9 +456,31 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
         };
         let parentThreadId = recipient.parent_thread_id;
         let parentMimeMessageId = recipient.parent_mime_message_id;
+        const parentResult = parentBatchId
+          ? parentResultsByEmail?.get(recipient.email.toLowerCase().trim())
+          : undefined;
+        const manualStop = parentBatchId
+          ? manualStopsByEmail?.get(recipient.email.toLowerCase().trim())
+          : undefined;
+
+        if (manualStop) {
+          const { error: manualStopError } = await db
+            .from("send_recipients")
+            .update({
+              status: "manually_stopped",
+              last_error: "Sequence manually stopped.",
+              last_error_at: new Date().toISOString(),
+              gmail_thread_id: parentThreadId ?? manualStop.threadId ?? null,
+              gmail_mime_message_id: parentMimeMessageId ?? manualStop.mimeMessageId ?? null,
+            })
+            .eq("id", recipient.id);
+          if (manualStopError) {
+            errors.push(`${contact.email}: manual stop update failed: ${manualStopError.message}`);
+          }
+          continue;
+        }
 
         if (parentBatchId && (!parentThreadId || !parentMimeMessageId)) {
-          const parentResult = parentResultsByEmail?.get(recipient.email.toLowerCase().trim());
           if (parentResult?.threadId && parentResult.mimeMessageId) {
             parentThreadId = parentResult.threadId;
             parentMimeMessageId = parentResult.mimeMessageId;
@@ -585,7 +627,12 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
 
       if (completedAt) {
         const recipientResults = recipientRows
-          .filter((r) => r.status === "sent" || r.status === "failed" || r.status === "skipped_replied")
+          .filter((r) =>
+            r.status === "sent" ||
+            r.status === "failed" ||
+            r.status === "skipped_replied" ||
+            r.status === "manually_stopped"
+          )
           .map((r) => ({
             email: r.email,
             status: r.status,
