@@ -5,6 +5,17 @@ export interface EmailAttachment {
   name: string;
   contentType: string;
   size: number;
+  storagePath?: string;
+  base64?: string;
+}
+
+export interface SavedAttachment extends EmailAttachment {
+  storagePath: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PreparedEmailAttachment extends EmailAttachment {
   base64: string;
 }
 
@@ -44,10 +55,90 @@ export function validateEmailAttachment(input: unknown): string | null {
   ) {
     return `Attachment must be ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} or smaller`;
   }
-  if (typeof attachment.base64 !== "string") return "Attachment data is required";
+  if (attachment.storagePath !== undefined) {
+    if (
+      typeof attachment.storagePath !== "string" ||
+      !attachment.storagePath.trim() ||
+      attachment.storagePath.length > 1024 ||
+      /[\r\n]/.test(attachment.storagePath)
+    ) {
+      return "Attachment storage path is invalid";
+    }
+  }
+  if (attachment.base64 !== undefined && typeof attachment.base64 !== "string") {
+    return "Attachment data is invalid";
+  }
+  if (!attachment.storagePath && !attachment.base64) return "Attachment data is required";
+  if (!attachment.base64) return null;
 
   const estimatedBytes = estimateBase64Bytes(attachment.base64);
   if (estimatedBytes !== attachment.size) return "Attachment data is invalid";
 
   return null;
+}
+
+export async function uploadAttachmentFile(file: File): Promise<SavedAttachment> {
+  const res = await fetch("/api/attachments/upload-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: file.name,
+      contentType: "application/pdf",
+      size: file.size,
+    }),
+  });
+  const payload = (await res.json().catch(() => ({}))) as {
+    attachment?: SavedAttachment;
+    signedUrl?: string;
+    error?: string;
+  };
+  if (!res.ok || !payload.attachment || !payload.signedUrl) {
+    throw new Error(payload.error || "Could not prepare attachment upload.");
+  }
+
+  const formData = new FormData();
+  formData.append("cacheControl", "3600");
+  formData.append(
+    "metadata",
+    JSON.stringify({
+      originalName: file.name,
+      contentType: "application/pdf",
+      size: file.size,
+    })
+  );
+  formData.append("", file);
+  const uploadRes = await fetch(payload.signedUrl, {
+    method: "PUT",
+    headers: { "x-upsert": "true" },
+    body: formData,
+  });
+  if (!uploadRes.ok) {
+    throw new Error(`Attachment upload failed: HTTP ${uploadRes.status}`);
+  }
+
+  return payload.attachment;
+}
+
+export async function fetchSavedAttachments(): Promise<SavedAttachment[]> {
+  const res = await fetch("/api/attachments");
+  const payload = (await res.json().catch(() => ({}))) as {
+    attachments?: SavedAttachment[];
+    error?: string;
+  };
+  if (!res.ok || !payload.attachments) {
+    throw new Error(payload.error || "Could not load attachments.");
+  }
+  return payload.attachments;
+}
+
+export async function deleteSavedAttachment(storagePath: string): Promise<void> {
+  const res = await fetch("/api/attachments", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ storagePath }),
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error || "Could not delete attachment.");
+  }
 }

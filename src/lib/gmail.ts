@@ -1,5 +1,5 @@
 import { google } from "googleapis";
-import type { EmailAttachment } from "./attachments";
+import type { PreparedEmailAttachment } from "./attachments";
 
 export interface Contact {
   email: string;
@@ -158,7 +158,7 @@ function createHtmlPart(wrappedHtml: string, images: InlineImage[]): string[] {
   return parts;
 }
 
-function createAttachmentPart(attachment: EmailAttachment): string[] {
+function createAttachmentPart(attachment: PreparedEmailAttachment): string[] {
   const encodedFilename = encodeMimeParameter(attachment.name);
   return [
     `Content-Type: application/pdf; name*=${encodedFilename}`,
@@ -177,7 +177,7 @@ function createMimeMessage(
   extraHeaders: string[] = [],
   fromName?: string,
   fromEmail?: string,
-  attachment?: EmailAttachment | null
+  attachment?: PreparedEmailAttachment | null
 ): string {
   const { html: rewrittenBody, images } = extractInlineImages(cleanListHtml(htmlBody));
 
@@ -244,7 +244,7 @@ export async function sendMessage(
   signatureHtml?: string,
   fromName?: string,
   fromEmail?: string,
-  attachment?: EmailAttachment | null
+  attachment?: PreparedEmailAttachment | null
 ): Promise<{ id?: string | null; threadId?: string | null; mimeMessageId: string }> {
   const gmail = getGmailClient(accessToken);
 
@@ -276,7 +276,7 @@ export async function sendReply(
   signatureHtml?: string,
   fromName?: string,
   fromEmail?: string,
-  attachment?: EmailAttachment | null
+  attachment?: PreparedEmailAttachment | null
 ): Promise<{ id?: string | null; threadId?: string | null; mimeMessageId: string }> {
   const gmail = getGmailClient(accessToken);
 
@@ -339,7 +339,7 @@ export async function createDraft(
   subjectTemplate: string,
   bodyTemplate: string,
   signatureHtml?: string,
-  attachment?: EmailAttachment | null
+  attachment?: PreparedEmailAttachment | null
 ) {
   const gmail = getGmailClient(accessToken);
 

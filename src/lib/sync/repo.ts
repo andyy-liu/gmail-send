@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Batch, ContactRow, RecipientResult } from "@/lib/batches";
 import type { EmailAttachment } from "@/lib/attachments";
+import { attachmentPathBelongsToUser } from "@/lib/attachment-storage";
 import type { CustomVariable } from "@/lib/variables";
 import { listVariables } from "@/lib/sync/variables-repo";
 
@@ -383,6 +384,13 @@ export interface BatchPatch {
 /** Patch a batch. For root batches, mirrors name into the matching campaigns row. */
 export async function updateBatch(userId: string, batchId: string, patch: BatchPatch): Promise<void> {
   const db = createAdminClient();
+  if (
+    patch.attachment?.storagePath &&
+    !patch.attachment.base64 &&
+    !attachmentPathBelongsToUser(patch.attachment.storagePath, userId)
+  ) {
+    throw new Error("Attachment does not belong to this user");
+  }
 
   const update: Record<string, unknown> = {};
   if (patch.name !== undefined) update.name = patch.name;

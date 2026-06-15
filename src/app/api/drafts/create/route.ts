@@ -7,6 +7,7 @@ import { validateContacts, hasCRLF, validateTemplateTokens, validateEmailAttachm
 import { requireUserId } from "@/lib/sync/auth-helper";
 import { listVariables } from "@/lib/sync/variables-repo";
 import { recordDraftsCreated } from "@/lib/sync/repo";
+import { resolveAttachmentForSend } from "@/lib/attachment-storage";
 
 export async function POST(request: Request) {
   try {
@@ -34,6 +35,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: attachmentError }, { status: 400 });
     }
     const emailAttachment = attachment as EmailAttachment | null | undefined;
+    if (emailAttachment && !batchId) {
+      return NextResponse.json({ error: "batchId is required for attachments" }, { status: 400 });
+    }
     const auth = await requireUserId();
     if ("response" in auth) return auth.response;
     const variables = await listVariables(auth.userId);
@@ -44,6 +48,11 @@ export async function POST(request: Request) {
 
     const results = [];
     const errors = [];
+    const preparedAttachment = await resolveAttachmentForSend(
+      emailAttachment,
+      auth.userId,
+      batchId
+    );
 
     // Process each contact
     for (const contact of contacts as Contact[]) {
@@ -54,7 +63,7 @@ export async function POST(request: Request) {
           subject,
           emailBody,
           signature || undefined,
-          emailAttachment ?? undefined
+          preparedAttachment
         );
         results.push({ email: contact.email, draftId: draft.id });
       } catch (err: unknown) {
@@ -76,6 +85,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ results, errors });
   } catch (err: unknown) {
     console.error("Critical error in draft creation route:", err);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    const message = err instanceof Error ? err.message : "Internal Server Error";
+    const status = message.includes("Attachment") ? 400 : 500;
+    return NextResponse.json({ error: status === 400 ? message : "Internal Server Error" }, { status });
   }
 }

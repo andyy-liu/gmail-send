@@ -72,7 +72,12 @@ export async function PATCH(
   } catch (err) {
     console.error("PATCH /api/batches/[id] failed:", err);
     const message = err instanceof Error ? err.message : "Internal Server Error";
-    const status = message === "Batch not found" ? 404 : 500;
+    const status =
+      message === "Batch not found"
+        ? 404
+        : message.includes("Attachment")
+          ? 400
+          : 500;
     return NextResponse.json({ error: message }, { status });
   }
 }

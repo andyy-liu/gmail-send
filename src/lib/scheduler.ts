@@ -4,6 +4,7 @@ import { decryptToken } from "./encrypt";
 import { sendMessage, sendReply, hasRecipientReplied } from "./gmail";
 import type { Contact } from "./gmail";
 import type { EmailAttachment } from "./attachments";
+import { resolveAttachmentForSend } from "./attachment-storage";
 
 export interface ScheduleJobParams {
   userId: string;
@@ -451,6 +452,8 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
         );
       }
 
+      const preparedAttachment = await resolveAttachmentForSend(attachment, job.user_id, job.batch_id);
+
       const { data: recipients, error: recipientsError } = await db
         .from("send_recipients")
         .select(
@@ -596,9 +599,9 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
                   signature,
                   undefined,
                   undefined,
-                  attachment
+                  preparedAttachment
                 )
-              : await sendMessage(accessToken, contact, subject, body, signature, undefined, undefined, attachment);
+              : await sendMessage(accessToken, contact, subject, body, signature, undefined, undefined, preparedAttachment);
 
           const { error: markSentError } = await db
             .from("send_recipients")

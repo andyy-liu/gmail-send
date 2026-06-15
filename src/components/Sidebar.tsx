@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Batch } from "@/lib/batches";
 import { Session } from "next-auth";
 import { signOut } from "next-auth/react";
-import { Plus, ChevronLeft, ChevronRight, MoreHorizontal, PenLine, LogOut, Braces, Bell } from "lucide-react";
+import { Plus, ChevronLeft, ChevronRight, MoreHorizontal, PenLine, LogOut, Braces, Bell, Paperclip } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +24,7 @@ interface SidebarProps {
   onSignature: () => void;
   onVariables: () => void;
   onNotifications: () => void;
+  onAttachments: () => void;
   session: Session;
 }
 
@@ -38,6 +39,7 @@ export function Sidebar({
   onSignature,
   onVariables,
   onNotifications,
+  onAttachments,
   session,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -175,6 +177,13 @@ export function Sidebar({
             >
               <Braces className="h-3.5 w-3.5 shrink-0" />
               Variables
+            </button>
+            <button
+              onClick={onAttachments}
+              className="flex items-center gap-2 w-full px-2 py-1.5 text-xs text-neutral-500 hover:text-neutral-800 hover:bg-neutral-50 rounded transition-colors"
+            >
+              <Paperclip className="h-3.5 w-3.5 shrink-0" />
+              Attachments
             </button>
             <button
               onClick={onSignature}

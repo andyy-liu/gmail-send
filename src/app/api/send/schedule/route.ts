@@ -8,6 +8,7 @@ import type { EmailAttachment } from "@/lib/attachments";
 import { validateContacts, hasCRLF, validateTemplateTokens, validateEmailAttachment } from "@/lib/validate";
 import { listVariables } from "@/lib/sync/variables-repo";
 import { filterStoppedContactsForBatch } from "@/lib/sync/repo";
+import { resolveAttachmentForSend } from "@/lib/attachment-storage";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -136,6 +137,7 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    await resolveAttachmentForSend(emailAttachment, userId, batchId);
 
     let parentThreads: Record<string, { threadId: string; mimeMessageId: string }> | undefined;
     if (parentThreadIds && parentMimeMessageIds) {
@@ -172,7 +174,8 @@ export async function POST(request: Request) {
         : message.includes("Schedule") ||
           message.includes("scheduled") ||
           message.includes("Follow-up") ||
-          message.includes("before")
+          message.includes("before") ||
+          message.includes("Attachment")
         ? 400
         : 500;
     return NextResponse.json({ error: message }, { status });

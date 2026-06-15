@@ -9,6 +9,7 @@ import { NodeDrawer } from "@/components/NodeDrawer";
 import { SignatureDialog } from "@/components/SignatureDialog";
 import { VariablesDialog } from "@/components/VariablesDialog";
 import { NotificationsDialog } from "@/components/NotificationsDialog";
+import { AttachmentsDialog } from "@/components/AttachmentsDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
@@ -19,6 +20,7 @@ export default function Home() {
   const [sigDialogOpen, setSigDialogOpen] = useState(false);
   const [varsDialogOpen, setVarsDialogOpen] = useState(false);
   const [notifsDialogOpen, setNotifsDialogOpen] = useState(false);
+  const [attachmentsDialogOpen, setAttachmentsDialogOpen] = useState(false);
 
   const {
     batches,
@@ -98,6 +100,7 @@ export default function Home() {
         onSignature={() => setSigDialogOpen(true)}
         onVariables={() => setVarsDialogOpen(true)}
         onNotifications={() => setNotifsDialogOpen(true)}
+        onAttachments={() => setAttachmentsDialogOpen(true)}
         session={session}
       />
 
@@ -156,6 +159,13 @@ export default function Home() {
         open={notifsDialogOpen}
         onOpenChange={setNotifsDialogOpen}
         batches={batches}
+      />
+
+      <AttachmentsDialog
+        open={attachmentsDialogOpen}
+        onOpenChange={setAttachmentsDialogOpen}
+        batches={batches}
+        onUpdateBatch={updateBatch}
       />
     </div>
   );

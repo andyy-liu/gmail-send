@@ -26,7 +26,14 @@ import {
 } from "lucide-react";
 import { Batch, RecipientResult, RecipientResultStatus } from "@/lib/batches";
 import type { EmailAttachment } from "@/lib/attachments";
-import { ATTACHMENT_ACCEPT, MAX_ATTACHMENT_BYTES, formatAttachmentSize } from "@/lib/attachments";
+import {
+  ATTACHMENT_ACCEPT,
+  MAX_ATTACHMENT_BYTES,
+  fetchSavedAttachments,
+  formatAttachmentSize,
+  type SavedAttachment,
+  uploadAttachmentFile,
+} from "@/lib/attachments";
 import type { CustomVariable } from "@/lib/variables";
 import { useEmailSend } from "@/hooks/useEmailSend";
 import { ContactTable } from "@/components/ContactTable";
@@ -190,18 +197,6 @@ function DateTimePicker({
   );
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") resolve(reader.result);
-      else reject(new Error("Could not read file."));
-    };
-    reader.onerror = () => reject(new Error("Could not read file."));
-    reader.readAsDataURL(file);
-  });
-}
-
 function AttachmentField({
   attachment,
   disabled,
@@ -213,6 +208,24 @@ function AttachmentField({
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [reading, setReading] = useState(false);
+  const [savedOpen, setSavedOpen] = useState(false);
+  const [savedLoading, setSavedLoading] = useState(false);
+  const [savedAttachments, setSavedAttachments] = useState<SavedAttachment[]>([]);
+
+  async function loadSavedAttachments() {
+    setSavedLoading(true);
+    try {
+      setSavedAttachments(await fetchSavedAttachments());
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not load attachments.");
+    } finally {
+      setSavedLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (savedOpen) void loadSavedAttachments();
+  }, [savedOpen]);
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -231,16 +244,9 @@ function AttachmentField({
 
     setReading(true);
     try {
-      const dataUrl = await readFileAsDataUrl(file);
-      const base64 = dataUrl.split(",", 2)[1];
-      if (!base64) throw new Error("Could not read file.");
-      onChange({
-        name: file.name,
-        contentType: "application/pdf",
-        size: file.size,
-        base64,
-      });
-      toast.success("Attachment added.");
+      const uploaded = await uploadAttachmentFile(file);
+      onChange(uploaded);
+      toast.success("Attachment uploaded.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not read attachment.");
     } finally {
@@ -255,19 +261,79 @@ function AttachmentField({
       <div className="flex items-center justify-between">
         <Label className="text-xs font-medium text-neutral-600">Attachment</Label>
         {!disabled && (
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={reading}
-            className="inline-flex h-7 items-center gap-1.5 rounded border border-neutral-200 bg-white px-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
-          >
-            {reading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Paperclip className="h-3.5 w-3.5" />
-            )}
-            {attachment ? "Replace PDF" : "Add PDF"}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <Popover
+              open={savedOpen}
+              onOpenChange={setSavedOpen}
+            >
+              <PopoverTrigger
+                render={
+                  <button
+                    type="button"
+                    className="inline-flex h-7 items-center gap-1.5 rounded border border-neutral-200 bg-white px-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Choose saved
+                  </button>
+                }
+              />
+              <PopoverContent
+                align="end"
+                className="w-80 p-1"
+              >
+                {savedLoading ? (
+                  <div className="flex items-center justify-center gap-2 px-3 py-6 text-xs text-neutral-400">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading PDFs
+                  </div>
+                ) : savedAttachments.length === 0 ? (
+                  <div className="px-3 py-6 text-center">
+                    <p className="text-xs font-medium text-neutral-600">No saved PDFs</p>
+                    <p className="mt-1 text-[11px] text-neutral-400">Upload one here or from Attachments.</p>
+                  </div>
+                ) : (
+                  <div className="max-h-64 overflow-y-auto">
+                    {savedAttachments.map((saved) => {
+                      const selected = attachment?.storagePath === saved.storagePath;
+                      return (
+                        <button
+                          key={saved.storagePath}
+                          type="button"
+                          onClick={() => {
+                            onChange(saved);
+                            setSavedOpen(false);
+                          }}
+                          className={cn(
+                            "flex w-full min-w-0 items-center gap-2 rounded px-2 py-2 text-left hover:bg-neutral-50",
+                            selected && "bg-neutral-100"
+                          )}
+                        >
+                          <FileText className="h-4 w-4 shrink-0 text-neutral-500" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-medium text-neutral-800">{saved.name}</span>
+                            <span className="block text-[11px] text-neutral-400">{formatAttachmentSize(saved.size)}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={reading}
+              className="inline-flex h-7 items-center gap-1.5 rounded border border-neutral-200 bg-white px-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+            >
+              {reading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Paperclip className="h-3.5 w-3.5" />
+              )}
+              {reading ? "Uploading..." : attachment ? "Replace PDF" : "Add PDF"}
+            </button>
+          </div>
         )}
       </div>
       <input
