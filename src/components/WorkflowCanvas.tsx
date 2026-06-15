@@ -14,7 +14,7 @@ import {
   Position,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Batch } from "@/lib/batches";
+import { Batch, inheritedContactsForBatch } from "@/lib/batches";
 import { Mail, Users, Trash2, Plus } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 
@@ -228,11 +228,9 @@ export function WorkflowCanvas({
     y += SEQ_H + GAP;
 
     chain.forEach((batch, i) => {
-      const parent = batch.parentBatchId
-        ? chain.find((b) => b.id === batch.parentBatchId)
-        : undefined;
-      const effectiveContacts = parent ? parent.contacts : batch.contacts;
-      const recipientCount = (effectiveContacts ?? []).filter((c) => c.email).length;
+      const recipientCount = inheritedContactsForBatch(batch, chain).filter(
+        (c) => c.email,
+      ).length;
 
       nodes.push({
         id: batch.id,

@@ -24,7 +24,14 @@ import {
   Paperclip,
   X,
 } from "lucide-react";
-import { Batch, RecipientResult, RecipientResultStatus } from "@/lib/batches";
+import {
+  Batch,
+  RecipientResult,
+  RecipientResultStatus,
+  findRootBatch,
+  inheritedContactsForBatch,
+  stoppedResultsForBatch,
+} from "@/lib/batches";
 import type { EmailAttachment } from "@/lib/attachments";
 import {
   ATTACHMENT_ACCEPT,
@@ -373,18 +380,17 @@ function AttachmentField({
 }
 
 /**
- * Stop state lives on the root batch (all emails in a chain share one Gmail
- * thread). For a follow-up tab we overlay root-side stopped statuses onto the
- * follow-up's own results so the user sees the same markers regardless of
- * which node is selected.
+ * Stop state can be recorded on any batch in the sequence. For each tab we
+ * overlay sequence-level stopped statuses onto the node's own results so later
+ * follow-ups inherit reply/manual-stop markers from earlier sends.
  */
-function mergeWithParentReplies(
+function mergeWithSequenceStops(
   ownResults: RecipientResult[] | undefined,
-  parentResults: RecipientResult[] | undefined
+  stoppedResults: RecipientResult[] | undefined
 ): RecipientResult[] | undefined {
-  if (!parentResults?.length) return ownResults;
+  if (!stoppedResults?.length) return ownResults;
   const stoppedByEmail = new Map<string, RecipientResult>();
-  for (const pr of parentResults) {
+  for (const pr of stoppedResults) {
     if (
       pr.status === "replied" ||
       pr.status === "skipped_replied" ||
@@ -397,7 +403,7 @@ function mergeWithParentReplies(
 
   const own = ownResults ?? [];
   const ownByEmail = new Map(own.map((r) => [r.email.toLowerCase().trim(), r]));
-  // Promote rows when the shared sequence state shows this recipient is now
+  // Promote rows when sequence state shows this recipient is now
   // stopped. Reply-derived stops only upgrade sent rows; manual stops can
   // override other terminal states because the user is explicitly ending the
   // sequence from this point forward.
@@ -416,7 +422,7 @@ function mergeWithParentReplies(
     }
     return r;
   });
-  // Add parent-side stopped recipients we don't have our own row for (typical
+  // Add sequence-side stopped recipients we don't have our own row for (typical
   // for an unsent follow-up: own is empty, surface parent's state here).
   for (const [key, pr] of stoppedByEmail) {
     if (ownByEmail.has(key)) continue;
@@ -518,12 +524,9 @@ export function NodeDrawer({
   const scheduledInPast =
     !!scheduledAt && new Date(scheduledAt).getTime() <= Date.now();
 
-  // Recipients shown for this node. Follow-ups inherit from parent's current
-  // contacts so the recipient list always lives on the root node and stays
-  // in sync. Otherwise we use the node's own contacts.
-  const displayedContacts = isFollowUp
-    ? (parent?.contacts ?? [])
-    : (batch?.contacts ?? []);
+  // Recipients shown for this node. Follow-ups inherit from the root batch so
+  // deeper follow-ups do not lose contacts when their immediate parent has none.
+  const displayedContacts = inheritedContactsForBatch(batch, batches);
 
   const isSendAction = !scheduledAt && sendMode === "send";
   const needsConfirmation =
@@ -595,15 +598,7 @@ export function NodeDrawer({
   // ─── Reply detection ─────────────────────────────────────────────────────
   // All emails in a chain share one Gmail thread per recipient, so we always
   // check against the root batch — it's the single source of truth.
-  const rootBatch = (() => {
-    let cur = batch;
-    while (cur?.parentBatchId) {
-      const p = batches.find((b) => b.id === cur!.parentBatchId);
-      if (!p) break;
-      cur = p;
-    }
-    return cur;
-  })();
+  const rootBatch = findRootBatch(batch, batches);
 
   const canCheckReplies =
     !!rootBatch &&
@@ -939,9 +934,9 @@ export function NodeDrawer({
                   </p>
                 )}
                 {(() => {
-                  const displayResults = mergeWithParentReplies(
+                  const displayResults = mergeWithSequenceStops(
                     batch.recipientResults,
-                    isFollowUp ? rootBatch?.recipientResults : undefined,
+                    stoppedResultsForBatch(batch, batches),
                   );
                   const stoppedCount = (displayResults ?? []).filter(
                     isStoppedResult,
@@ -995,7 +990,7 @@ export function NodeDrawer({
                         readOnly={locked || isFollowUp}
                         readOnlyNotice={
                           isFollowUp
-                            ? "Recipients are inherited from the previous email and edited there."
+                            ? "Recipients are inherited from the initial email and edited there."
                             : undefined
                         }
                         recipientResults={displayResults}

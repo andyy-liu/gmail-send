@@ -2,7 +2,12 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Batch, RecipientResult } from "@/lib/batches";
+import {
+  Batch,
+  RecipientResult,
+  inheritedContactsForBatch,
+  stoppedEmailsForBatch,
+} from "@/lib/batches";
 import type { CustomVariable } from "@/lib/variables";
 import { checkTemplateTokens } from "@/lib/variables";
 
@@ -29,14 +34,6 @@ function isWeekendDate(value: string) {
   if (Number.isNaN(date.getTime())) return false;
   const day = date.getDay();
   return day === 0 || day === 6;
-}
-
-function isStoppedRecipient(r: RecipientResult | undefined) {
-  return (
-    r?.status === "replied" ||
-    r?.status === "skipped_replied" ||
-    r?.status === "manually_stopped"
-  );
 }
 
 export function useEmailSend({
@@ -72,25 +69,15 @@ export function useEmailSend({
         );
       }
 
-      // Follow-ups always send to the parent's current contacts. This keeps
+      // Follow-ups always send to the root batch's current contacts. This keeps
       // the recipient list authoritative on the root node and avoids the
       // snapshot drift bug from copying contacts at creation time.
       const parent = activeBatch.parentBatchId
         ? batches.find((b) => b.id === activeBatch.parentBatchId)
         : undefined;
-      let rootBatch = activeBatch;
-      while (rootBatch.parentBatchId) {
-        const ancestor = batches.find((b) => b.id === rootBatch.parentBatchId);
-        if (!ancestor) break;
-        rootBatch = ancestor;
-      }
-      const stoppedEmails = new Set(
-        (rootBatch.recipientResults ?? [])
-          .filter(isStoppedRecipient)
-          .map((r) => r.email.toLowerCase().trim())
-      );
+      const stoppedEmails = stoppedEmailsForBatch(activeBatch, batches);
       const sendContacts = activeBatch.parentBatchId
-        ? (parent?.contacts ?? []).filter(
+        ? inheritedContactsForBatch(activeBatch, batches).filter(
             (c) => !stoppedEmails.has(c.email.toLowerCase().trim())
           )
         : activeBatch.contacts;
