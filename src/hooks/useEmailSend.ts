@@ -175,6 +175,7 @@ export function useEmailSend({
             signature,
             contacts: sendContacts,
             scheduledAt: scheduledDate.toISOString(),
+            attachment: activeBatch.attachment ?? null,
             ...(parentThreadIds && { parentThreadIds, parentMimeMessageIds }),
           }),
         });
@@ -193,6 +194,7 @@ export function useEmailSend({
             body: activeBatch.body,
             signature,
             contacts: sendContacts,
+            attachment: activeBatch.attachment ?? null,
             ...(parentThreadIds && { parentThreadIds, parentMimeMessageIds }),
           }),
         });
@@ -234,6 +236,7 @@ export function useEmailSend({
             body: activeBatch.body,
             signature,
             contacts: sendContacts,
+            attachment: activeBatch.attachment ?? null,
           }),
         });
         const data = await res.json();

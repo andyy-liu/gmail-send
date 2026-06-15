@@ -1,0 +1,53 @@
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const ATTACHMENT_ACCEPT = ".pdf,application/pdf";
+
+export interface EmailAttachment {
+  name: string;
+  contentType: string;
+  size: number;
+  base64: string;
+}
+
+export function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function estimateBase64Bytes(base64: string): number {
+  const normalized = base64.replace(/\s+/g, "");
+  if (!normalized || normalized.length % 4 === 1) return -1;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) return -1;
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return Math.floor((normalized.length * 3) / 4) - padding;
+}
+
+export function validateEmailAttachment(input: unknown): string | null {
+  if (input === undefined || input === null) return null;
+  if (typeof input !== "object" || Array.isArray(input)) return "Invalid attachment";
+
+  const attachment = input as Partial<EmailAttachment>;
+  if (typeof attachment.name !== "string" || !attachment.name.trim()) {
+    return "Attachment filename is required";
+  }
+  if (attachment.name.length > 255 || /[\r\n]/.test(attachment.name)) {
+    return "Attachment filename is invalid";
+  }
+  if (attachment.contentType !== "application/pdf") {
+    return "Attachment must be a PDF";
+  }
+  if (
+    typeof attachment.size !== "number" ||
+    !Number.isInteger(attachment.size) ||
+    attachment.size <= 0 ||
+    attachment.size > MAX_ATTACHMENT_BYTES
+  ) {
+    return `Attachment must be ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} or smaller`;
+  }
+  if (typeof attachment.base64 !== "string") return "Attachment data is required";
+
+  const estimatedBytes = estimateBase64Bytes(attachment.base64);
+  if (estimatedBytes !== attachment.size) return "Attachment data is invalid";
+
+  return null;
+}

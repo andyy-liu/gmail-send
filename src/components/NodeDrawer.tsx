@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, type ChangeEvent } from "react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -21,8 +21,12 @@ import {
   CalendarIcon,
   RefreshCw,
   MailMinus,
+  Paperclip,
+  X,
 } from "lucide-react";
 import { Batch, RecipientResult, RecipientResultStatus } from "@/lib/batches";
+import type { EmailAttachment } from "@/lib/attachments";
+import { ATTACHMENT_ACCEPT, MAX_ATTACHMENT_BYTES, formatAttachmentSize } from "@/lib/attachments";
 import type { CustomVariable } from "@/lib/variables";
 import { useEmailSend } from "@/hooks/useEmailSend";
 import { ContactTable } from "@/components/ContactTable";
@@ -182,6 +186,122 @@ function DateTimePicker({
         }}
         className="h-8 w-[96px] px-2 text-xs tabular-nums [appearance:textfield] [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none"
       />
+    </div>
+  );
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Could not read file."));
+    };
+    reader.onerror = () => reject(new Error("Could not read file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function AttachmentField({
+  attachment,
+  disabled,
+  onChange,
+}: {
+  attachment?: EmailAttachment | null;
+  disabled: boolean;
+  onChange: (attachment: EmailAttachment | null) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [reading, setReading] = useState(false);
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) {
+      toast.error("Attachment must be a PDF.");
+      return;
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      toast.error(`PDF must be ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} or smaller.`);
+      return;
+    }
+
+    setReading(true);
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const base64 = dataUrl.split(",", 2)[1];
+      if (!base64) throw new Error("Could not read file.");
+      onChange({
+        name: file.name,
+        contentType: "application/pdf",
+        size: file.size,
+        base64,
+      });
+      toast.success("Attachment added.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not read attachment.");
+    } finally {
+      setReading(false);
+    }
+  }
+
+  if (disabled && !attachment) return null;
+
+  return (
+    <div className="space-y-2 border-t border-neutral-100 pt-4">
+      <div className="flex items-center justify-between">
+        <Label className="text-xs font-medium text-neutral-600">Attachment</Label>
+        {!disabled && (
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={reading}
+            className="inline-flex h-7 items-center gap-1.5 rounded border border-neutral-200 bg-white px-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+          >
+            {reading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Paperclip className="h-3.5 w-3.5" />
+            )}
+            {attachment ? "Replace PDF" : "Add PDF"}
+          </button>
+        )}
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ATTACHMENT_ACCEPT}
+        className="hidden"
+        onChange={handleFileChange}
+        disabled={disabled || reading}
+      />
+      {attachment && (
+        <div className="flex min-w-0 items-center gap-2 rounded border border-neutral-200 bg-neutral-50 px-3 py-2">
+          <Paperclip className="h-4 w-4 shrink-0 text-neutral-500" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium text-neutral-800">{attachment.name}</p>
+            <p className="text-[11px] text-neutral-400">{formatAttachmentSize(attachment.size)}</p>
+          </div>
+          {!disabled && (
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              className="rounded p-1 text-neutral-400 hover:bg-neutral-200 hover:text-neutral-700"
+              title="Remove attachment"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+      {!attachment && !disabled && (
+        <p className="text-[11px] text-neutral-400">
+          PDF up to {formatAttachmentSize(MAX_ATTACHMENT_BYTES)}.
+        </p>
+      )}
     </div>
   );
 }
@@ -346,6 +466,7 @@ export function NodeDrawer({
   const sampleRecipients = displayedContacts
     .filter((c) => c.email.trim())
     .slice(0, 4);
+  const attachment = batch?.attachment ?? null;
 
   const { isSubmitting, submit } = useEmailSend({
     activeBatch: batch,
@@ -718,6 +839,11 @@ export function NodeDrawer({
                   readOnly={locked}
                   variables={variables}
                 />
+                <AttachmentField
+                  attachment={batch.attachment}
+                  disabled={locked}
+                  onChange={(next) => onUpdate({ attachment: next })}
+                />
               </>
             )}
           </TabsContent>
@@ -920,6 +1046,16 @@ export function NodeDrawer({
                     </span>
                     <p className="mt-0.5 text-neutral-800">{batch.subject}</p>
                   </div>
+                  {attachment && (
+                    <div>
+                      <span className="text-xs font-medium uppercase tracking-wide text-neutral-400">
+                        Attachment
+                      </span>
+                      <p className="mt-0.5 truncate text-neutral-800">
+                        {attachment.name} · {formatAttachmentSize(attachment.size)}
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <span className="text-xs font-medium uppercase tracking-wide text-neutral-400">
                       Recipients

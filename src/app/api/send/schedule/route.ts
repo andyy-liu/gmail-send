@@ -4,7 +4,8 @@ import { authOptions } from "@/lib/auth";
 import { scheduleJob, listJobsForUser, cancelJob, cancelAllJobsForUser } from "@/lib/scheduler";
 import { resolveDbUser } from "@/lib/supabase/resolve-user";
 import type { Contact } from "@/lib/gmail";
-import { validateContacts, hasCRLF, validateTemplateTokens } from "@/lib/validate";
+import type { EmailAttachment } from "@/lib/attachments";
+import { validateContacts, hasCRLF, validateTemplateTokens, validateEmailAttachment } from "@/lib/validate";
 import { listVariables } from "@/lib/sync/variables-repo";
 import { filterStoppedContactsForBatch } from "@/lib/sync/repo";
 
@@ -66,6 +67,7 @@ export async function POST(request: Request) {
       signature,
       contacts,
       scheduledAt,
+      attachment,
       parentThreadIds,
       parentMimeMessageIds,
     } = body as {
@@ -75,6 +77,7 @@ export async function POST(request: Request) {
       signature?: string;
       contacts: Contact[];
       scheduledAt: string;
+      attachment?: unknown;
       parentThreadIds?: Record<string, string>;
       parentMimeMessageIds?: Record<string, string>;
     };
@@ -89,6 +92,11 @@ export async function POST(request: Request) {
     if (contactError) {
       return NextResponse.json({ error: contactError }, { status: 400 });
     }
+    const attachmentError = validateEmailAttachment(attachment);
+    if (attachmentError) {
+      return NextResponse.json({ error: attachmentError }, { status: 400 });
+    }
+    const emailAttachment = attachment as EmailAttachment | null | undefined;
     if (parentThreadIds) {
       for (const v of Object.values(parentThreadIds)) {
         if (hasCRLF(v)) return NextResponse.json({ error: "Invalid thread ID" }, { status: 400 });
@@ -149,6 +157,7 @@ export async function POST(request: Request) {
       body: emailBody,
       signature: signature || "",
       contacts: eligibleContacts,
+      attachment: emailAttachment ?? null,
       scheduledAt: scheduledDate.toISOString(),
       parentThreads,
     });

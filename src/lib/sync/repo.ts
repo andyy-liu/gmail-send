@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import type { Batch, ContactRow, RecipientResult } from "@/lib/batches";
+import type { EmailAttachment } from "@/lib/attachments";
 import type { CustomVariable } from "@/lib/variables";
 import { listVariables } from "@/lib/sync/variables-repo";
 
@@ -30,6 +31,7 @@ interface DbBatch {
   subject: string;
   body_html: string;
   signature_html?: string;
+  attachment: EmailAttachment | null;
   status: DbBatchStatus;
   scheduled_at: string | null;
   scheduled_delay_value: number | string | null;
@@ -71,6 +73,7 @@ function rowToBatch(b: DbBatch, contacts: ContactRow[]): Batch {
   }
   if (b.scheduled_job_id) batch.scheduledJobId = b.scheduled_job_id;
   if (b.recipient_results) batch.recipientResults = b.recipient_results;
+  if (b.attachment) batch.attachment = b.attachment;
   return batch;
 }
 
@@ -102,7 +105,7 @@ export async function loadUserState(userId: string): Promise<{
   const { data: batchRows, error: batchErr } = await db
     .from("batches")
     .select(
-      "id, campaign_id, parent_batch_id, name, subject, body_html, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
+      "id, campaign_id, parent_batch_id, name, subject, body_html, attachment, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
     )
     .eq("user_id", userId)
     .order("created_at", { ascending: true });
@@ -156,7 +159,7 @@ export async function createCampaign(userId: string, name: string): Promise<Batc
       status: "draft",
     })
     .select(
-      "id, campaign_id, parent_batch_id, name, subject, body_html, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
+      "id, campaign_id, parent_batch_id, name, subject, body_html, attachment, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
     )
     .single();
   if (batchErr || !batch) {
@@ -206,7 +209,7 @@ export async function createFollowUp(userId: string, parentId: string): Promise<
       status: "draft",
     })
     .select(
-      "id, campaign_id, parent_batch_id, name, subject, body_html, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
+      "id, campaign_id, parent_batch_id, name, subject, body_html, attachment, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
     )
     .single();
   if (batchErr || !batch) throw batchErr ?? new Error("Failed to create follow-up");
@@ -266,7 +269,7 @@ export async function duplicateCampaign(userId: string, rootBatchId: string): Pr
   const { data: batchRows, error: batchErr } = await db
     .from("batches")
     .select(
-      "id, campaign_id, parent_batch_id, name, subject, body_html, signature_html, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
+      "id, campaign_id, parent_batch_id, name, subject, body_html, signature_html, attachment, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
     )
     .eq("user_id", userId)
     .eq("campaign_id", root.campaign_id)
@@ -319,13 +322,14 @@ export async function duplicateCampaign(userId: string, rootBatchId: string): Pr
           subject: source.subject,
           body_html: source.body_html,
           signature_html: source.signature_html ?? "",
+          attachment: source.attachment ?? null,
           status: "draft",
           scheduled_at: draftScheduledAtForCopy(source),
           scheduled_delay_value: source.scheduled_delay_value,
           scheduled_delay_unit: source.scheduled_delay_unit,
         })
         .select(
-          "id, campaign_id, parent_batch_id, name, subject, body_html, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
+          "id, campaign_id, parent_batch_id, name, subject, body_html, attachment, status, scheduled_at, scheduled_delay_value, scheduled_delay_unit, recipient_results, scheduled_job_id, sent_at, created_at"
         )
         .single();
       if (copyErr || !copied) throw copyErr ?? new Error("Failed to create batch copy");
@@ -370,6 +374,7 @@ export interface BatchPatch {
   status?: UiBatchStatus;
   scheduledAt?: string | null;
   scheduledDelay?: { value: number; unit: "days" | "hours" } | null;
+  attachment?: EmailAttachment | null;
   scheduledJobId?: string | null;
   sentAt?: string | null;
   recipientResults?: RecipientResult[] | null;
@@ -383,6 +388,7 @@ export async function updateBatch(userId: string, batchId: string, patch: BatchP
   if (patch.name !== undefined) update.name = patch.name;
   if (patch.subject !== undefined) update.subject = patch.subject;
   if (patch.body !== undefined) update.body_html = patch.body;
+  if (patch.attachment !== undefined) update.attachment = patch.attachment;
   if (patch.status !== undefined) update.status = toDbStatus(patch.status);
   if (patch.scheduledAt !== undefined) update.scheduled_at = patch.scheduledAt;
   if (patch.scheduledJobId !== undefined) update.scheduled_job_id = patch.scheduledJobId;

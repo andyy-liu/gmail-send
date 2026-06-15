@@ -3,6 +3,7 @@ import { createAdminClient } from "./supabase/server";
 import { decryptToken } from "./encrypt";
 import { sendMessage, sendReply, hasRecipientReplied } from "./gmail";
 import type { Contact } from "./gmail";
+import type { EmailAttachment } from "./attachments";
 
 export interface ScheduleJobParams {
   userId: string;
@@ -12,6 +13,7 @@ export interface ScheduleJobParams {
   body: string;
   signature: string;
   contacts: Contact[];
+  attachment?: EmailAttachment | null;
   scheduledAt: string;
   parentThreads?: Record<string, { threadId: string; mimeMessageId: string }>;
 }
@@ -75,7 +77,7 @@ async function isManuallyStoppedInCampaign(
  */
 export async function scheduleJob(params: ScheduleJobParams): Promise<string> {
   const db = createAdminClient();
-  const { userId, googleAccountId, batchId, subject, body, signature, contacts, scheduledAt, parentThreads } = params;
+  const { userId, googleAccountId, batchId, subject, body, signature, contacts, attachment, scheduledAt, parentThreads } = params;
 
   // Verify ownership.
   const { data: existing, error: existingErr } = await db
@@ -133,6 +135,7 @@ export async function scheduleJob(params: ScheduleJobParams): Promise<string> {
         subject,
         body_html: body,
         signature_html: signature,
+        attachment: attachment ?? null,
         status: "scheduled",
         scheduled_at: scheduledAt,
       })
@@ -369,7 +372,7 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
       const { data: job, error: jobLoadError } = await db
         .from("send_jobs")
         .select(
-          "id, user_id, batch_id, batches!send_jobs_batch_id_fkey(subject, body_html, signature_html, parent_batch_id, campaign_id), google_accounts(refresh_token_ciphertext, refresh_token_iv, refresh_token_tag)"
+          "id, user_id, batch_id, batches!send_jobs_batch_id_fkey(subject, body_html, signature_html, attachment, parent_batch_id, campaign_id), google_accounts(refresh_token_ciphertext, refresh_token_iv, refresh_token_tag)"
         )
         .eq("id", jobId)
         .single();
@@ -391,12 +394,14 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
         subject: string;
         body_html: string;
         signature_html: string;
+        attachment: EmailAttachment | null;
         parent_batch_id: string | null;
         campaign_id: string;
       } | null;
       const subject = batch?.subject ?? "";
       const body = batch?.body_html ?? "";
       const signature = batch?.signature_html || undefined;
+      const attachment = batch?.attachment ?? undefined;
       const parentBatchId = batch?.parent_batch_id ?? null;
       let parentResultsByEmail: Map<string, ParentRecipientResult> | null = null;
       let manualStopsByEmail: Map<string, ParentRecipientResult> | null = null;
@@ -588,9 +593,12 @@ export async function processDueJobs(): Promise<{ processed: number; errors: str
                   parentMimeMessageId,
                   subject,
                   body,
-                  signature
+                  signature,
+                  undefined,
+                  undefined,
+                  attachment
                 )
-              : await sendMessage(accessToken, contact, subject, body, signature);
+              : await sendMessage(accessToken, contact, subject, body, signature, undefined, undefined, attachment);
 
           const { error: markSentError } = await db
             .from("send_recipients")

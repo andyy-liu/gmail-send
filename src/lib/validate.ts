@@ -1,4 +1,5 @@
 import { checkTemplateTokens, type CustomVariable } from "@/lib/variables";
+export { validateEmailAttachment } from "@/lib/attachments";
 
 export function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);

@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { createDraft, Contact } from "@/lib/gmail";
-import { validateContacts, hasCRLF, validateTemplateTokens } from "@/lib/validate";
+import type { EmailAttachment } from "@/lib/attachments";
+import { validateContacts, hasCRLF, validateTemplateTokens, validateEmailAttachment } from "@/lib/validate";
 import { requireUserId } from "@/lib/sync/auth-helper";
 import { listVariables } from "@/lib/sync/variables-repo";
 import { recordDraftsCreated } from "@/lib/sync/repo";
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { batchId, subject, body: emailBody, signature, contacts } = body;
+    const { batchId, subject, body: emailBody, signature, contacts, attachment } = body;
 
     if (!subject || !emailBody || !contacts || !Array.isArray(contacts)) {
       return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
@@ -28,6 +29,11 @@ export async function POST(request: Request) {
     if (contactError) {
       return NextResponse.json({ error: contactError }, { status: 400 });
     }
+    const attachmentError = validateEmailAttachment(attachment);
+    if (attachmentError) {
+      return NextResponse.json({ error: attachmentError }, { status: 400 });
+    }
+    const emailAttachment = attachment as EmailAttachment | null | undefined;
     const auth = await requireUserId();
     if ("response" in auth) return auth.response;
     const variables = await listVariables(auth.userId);
@@ -42,7 +48,14 @@ export async function POST(request: Request) {
     // Process each contact
     for (const contact of contacts as Contact[]) {
       try {
-        const draft = await createDraft(session.accessToken, contact, subject, emailBody, signature || undefined);
+        const draft = await createDraft(
+          session.accessToken,
+          contact,
+          subject,
+          emailBody,
+          signature || undefined,
+          emailAttachment ?? undefined
+        );
         results.push({ email: contact.email, draftId: draft.id });
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : "Unknown error";

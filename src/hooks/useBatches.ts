@@ -25,7 +25,7 @@ type BatchPatchInput = Partial<Batch>;
  * actually happened. We still keep them in local React state for snappy UI;
  * we just don't ship them over the wire.
  */
-const WIRE_PATCH_KEYS: (keyof Batch)[] = ["name", "subject", "body", "scheduledDelay"];
+const WIRE_PATCH_KEYS: (keyof Batch)[] = ["name", "subject", "body", "scheduledDelay", "attachment"];
 
 function patchToWire(patch: BatchPatchInput): Record<string, unknown> {
   const out: Record<string, unknown> = {};

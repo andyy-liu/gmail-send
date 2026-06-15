@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/sync/auth-helper";
 import { updateBatch, deleteBatch, type BatchPatch } from "@/lib/sync/repo";
+import { validateEmailAttachment, type EmailAttachment } from "@/lib/attachments";
 
 /**
  * User-facing PATCH allowlist. Notably absent: status, sentAt,
@@ -27,6 +28,11 @@ function parsePatch(input: unknown): BatchPatch | { error: string } {
   if ("body" in raw) {
     if (typeof raw.body !== "string") return { error: "Invalid body field" };
     patch.body = raw.body;
+  }
+  if ("attachment" in raw) {
+    const error = validateEmailAttachment(raw.attachment);
+    if (error) return { error };
+    patch.attachment = (raw.attachment as EmailAttachment | null | undefined) ?? null;
   }
   if ("scheduledDelay" in raw) {
     if (raw.scheduledDelay === null || raw.scheduledDelay === undefined) {

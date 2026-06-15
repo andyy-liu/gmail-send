@@ -1,4 +1,5 @@
 import { Contact } from "./gmail";
+import type { EmailAttachment } from "./attachments";
 
 export interface ContactRow extends Contact {
   id: string;
@@ -45,6 +46,7 @@ export interface Batch {
   // Canvas fields
   scheduledAt?: string;
   scheduledDelay?: { value: number; unit: "days" | "hours" };
+  attachment?: EmailAttachment | null;
   /** Set after a successful schedule; used to poll per-recipient progress. */
   scheduledJobId?: string;
 }

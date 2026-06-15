@@ -1,4 +1,5 @@
 import { google } from "googleapis";
+import type { EmailAttachment } from "./attachments";
 
 export interface Contact {
   email: string;
@@ -112,6 +113,62 @@ function chunkBase64(b64: string): string {
   return b64.replace(/(.{76})/g, "$1\r\n");
 }
 
+function encodeMimeParameter(value: string): string {
+  const cleaned = sanitizeHeader(value).trim() || "attachment";
+  const encoded = encodeURIComponent(cleaned).replace(
+    /['()*!]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `UTF-8''${encoded}`;
+}
+
+function createHtmlPart(wrappedHtml: string, images: InlineImage[]): string[] {
+  if (images.length === 0) {
+    return [
+      `Content-Type: text/html; charset=UTF-8`,
+      `Content-Transfer-Encoding: base64`,
+      ``,
+      chunkBase64(Buffer.from(wrappedHtml, "utf-8").toString("base64")),
+    ];
+  }
+
+  const boundary = `=_related_${crypto.randomUUID()}`;
+  const parts: string[] = [
+    `Content-Type: multipart/related; boundary="${boundary}"; type="text/html"`,
+    ``,
+    `--${boundary}`,
+    `Content-Type: text/html; charset=UTF-8`,
+    `Content-Transfer-Encoding: base64`,
+    ``,
+    chunkBase64(Buffer.from(wrappedHtml, "utf-8").toString("base64")),
+  ];
+  for (const img of images) {
+    const filenameExt = img.contentType.split("/")[1]?.split("+")[0] ?? "img";
+    parts.push(
+      `--${boundary}`,
+      `Content-Type: ${img.contentType}`,
+      `Content-Transfer-Encoding: base64`,
+      `Content-ID: <${img.cid}>`,
+      `Content-Disposition: inline; filename="image.${filenameExt}"`,
+      ``,
+      chunkBase64(img.base64.replace(/\s+/g, ""))
+    );
+  }
+  parts.push(`--${boundary}--`);
+  return parts;
+}
+
+function createAttachmentPart(attachment: EmailAttachment): string[] {
+  const encodedFilename = encodeMimeParameter(attachment.name);
+  return [
+    `Content-Type: application/pdf; name*=${encodedFilename}`,
+    `Content-Transfer-Encoding: base64`,
+    `Content-Disposition: attachment; filename*=${encodedFilename}`,
+    ``,
+    chunkBase64(attachment.base64.replace(/\s+/g, "")),
+  ];
+}
+
 function createMimeMessage(
   to: string,
   subject: string,
@@ -119,7 +176,8 @@ function createMimeMessage(
   mimeMessageId: string,
   extraHeaders: string[] = [],
   fromName?: string,
-  fromEmail?: string
+  fromEmail?: string,
+  attachment?: EmailAttachment | null
 ): string {
   const { html: rewrittenBody, images } = extractInlineImages(cleanListHtml(htmlBody));
 
@@ -148,43 +206,25 @@ function createMimeMessage(
     `MIME-Version: 1.0`,
   ];
 
+  const htmlPart = createHtmlPart(wrappedHtml, images);
   let message: string;
-  if (images.length === 0) {
+  if (!attachment) {
     message = [
       ...commonHeaders,
-      `Content-Type: text/html; charset=UTF-8`,
-      `Content-Transfer-Encoding: base64`,
-      ``,
-      chunkBase64(Buffer.from(wrappedHtml, "utf-8").toString("base64")),
+      ...htmlPart,
     ].join("\r\n");
   } else {
-    const boundary = `=_boundary_${crypto.randomUUID()}`;
-    const parts: string[] = [
-      `--${boundary}`,
-      `Content-Type: text/html; charset=UTF-8`,
-      `Content-Transfer-Encoding: base64`,
-      ``,
-      chunkBase64(Buffer.from(wrappedHtml, "utf-8").toString("base64")),
-    ];
-    for (const img of images) {
-      const filenameExt = img.contentType.split("/")[1]?.split("+")[0] ?? "img";
-      parts.push(
-        `--${boundary}`,
-        `Content-Type: ${img.contentType}`,
-        `Content-Transfer-Encoding: base64`,
-        `Content-ID: <${img.cid}>`,
-        `Content-Disposition: inline; filename="image.${filenameExt}"`,
-        ``,
-        chunkBase64(img.base64.replace(/\s+/g, ""))
-      );
-    }
-    parts.push(`--${boundary}--`, ``);
-
+    const boundary = `=_mixed_${crypto.randomUUID()}`;
     message = [
       ...commonHeaders,
-      `Content-Type: multipart/related; boundary="${boundary}"; type="text/html"`,
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
       ``,
-      parts.join("\r\n"),
+      `--${boundary}`,
+      ...htmlPart,
+      `--${boundary}`,
+      ...createAttachmentPart(attachment),
+      `--${boundary}--`,
+      ``,
     ].join("\r\n");
   }
 
@@ -203,7 +243,8 @@ export async function sendMessage(
   bodyTemplate: string,
   signatureHtml?: string,
   fromName?: string,
-  fromEmail?: string
+  fromEmail?: string,
+  attachment?: EmailAttachment | null
 ): Promise<{ id?: string | null; threadId?: string | null; mimeMessageId: string }> {
   const gmail = getGmailClient(accessToken);
 
@@ -211,7 +252,7 @@ export async function sendMessage(
   const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
   const mimeMessageId = `<${crypto.randomUUID()}@mail.gmail.com>`;
 
-  const rawMessage = createMimeMessage(contact.email, subject, body, mimeMessageId, [], fromName, fromEmail);
+  const rawMessage = createMimeMessage(contact.email, subject, body, mimeMessageId, [], fromName, fromEmail, attachment);
 
   const res = await gmail.users.messages.send({
     userId: "me",
@@ -234,7 +275,8 @@ export async function sendReply(
   bodyTemplate: string,
   signatureHtml?: string,
   fromName?: string,
-  fromEmail?: string
+  fromEmail?: string,
+  attachment?: EmailAttachment | null
 ): Promise<{ id?: string | null; threadId?: string | null; mimeMessageId: string }> {
   const gmail = getGmailClient(accessToken);
 
@@ -246,7 +288,7 @@ export async function sendReply(
   const raw = createMimeMessage(contact.email, subject, body, mimeMessageId, [
     `In-Reply-To: ${safeInReplyTo}`,
     `References: ${safeInReplyTo}`,
-  ], fromName, fromEmail);
+  ], fromName, fromEmail, attachment);
 
   const res = await gmail.users.messages.send({
     userId: "me",
@@ -296,7 +338,8 @@ export async function createDraft(
   contact: Contact,
   subjectTemplate: string,
   bodyTemplate: string,
-  signatureHtml?: string
+  signatureHtml?: string,
+  attachment?: EmailAttachment | null
 ) {
   const gmail = getGmailClient(accessToken);
 
@@ -304,7 +347,7 @@ export async function createDraft(
   const body = processTemplate(bodyTemplate, contact, true, signatureHtml ?? "");
 
   const mimeMessageId = `<${crypto.randomUUID()}@mail.gmail.com>`;
-  const rawMessage = createMimeMessage(contact.email, subject, body, mimeMessageId);
+  const rawMessage = createMimeMessage(contact.email, subject, body, mimeMessageId, [], undefined, undefined, attachment);
 
   const res = await gmail.users.drafts.create({
     userId: "me",

@@ -94,6 +94,7 @@ create table public.batches (
   subject text not null default '',
   body_html text not null default '',
   signature_html text not null default '',
+  attachment jsonb,
   status public.batch_status not null default 'draft',
   scheduled_at timestamptz,
   scheduled_delay_value numeric,
